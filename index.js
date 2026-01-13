@@ -1,6 +1,7 @@
 import express from "express";
 import * as baileysNS from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
+import fs from "fs/promises";
 
 // Resolver exports (ESM/CJS) de Baileys de forma robusta
 const baileysMod = baileysNS?.default ?? baileysNS;
@@ -31,7 +32,7 @@ app.get("/health", (req, res) => res.sendStatus(200));
 let lastQr = null;
 let sock = null;
 
-// Evita restarts simultáneos
+// Evita restarts/resets simultáneos
 let restarting = false;
 
 async function startBaileys() {
@@ -68,38 +69,70 @@ async function restartBaileys() {
     lastQr = null;
 
     // Cierra el socket actual (si existe)
-    try {
-      // logout puede fallar si aún está conectando, por eso va protegido
-      await sock?.logout?.();
-    } catch (_) {}
-
-    try {
-      sock?.end?.();
-    } catch (_) {}
+    try { await sock?.logout?.(); } catch (_) {}
+    try { sock?.end?.(); } catch (_) {}
 
     sock = null;
 
-    // Arranca uno nuevo (esto hará que Baileys emita un QR nuevo si no hay sesión válida)
+    // Arranca uno nuevo (emitirá QR si no hay sesión válida)
     await startBaileys();
   } finally {
     restarting = false;
   }
 }
 
+async function resetSession() {
+  if (restarting) return;
+  restarting = true;
+
+  try {
+    lastQr = null;
+
+    // Cierra el socket actual
+    try { await sock?.logout?.(); } catch (_) {}
+    try { sock?.end?.(); } catch (_) {}
+    sock = null;
+
+    // Borra credenciales guardadas y crea carpeta limpia
+    await fs.rm("/app/sessions", { recursive: true, force: true });
+    await fs.mkdir("/app/sessions", { recursive: true });
+
+    await startBaileys();
+  } finally {
+    restarting = false;
+  }
+}
+
+// Rutas base
 app.get("/", (req, res) => {
   res.send("OK. Visita /qr para escanear.");
 });
 
 app.get("/qr", async (req, res) => {
-  if (!lastQr) return res.status(404).send("Aun no hay QR. Revisa Logs o usa POST /restart.");
+  if (!lastQr) return res.status(404).send("Aun no hay QR. Revisa Logs o usa /restart o /reset.");
   const dataUrl = await QRCode.toDataURL(lastQr);
   res.setHeader("Content-Type", "text/html");
   res.end(`<img src="${dataUrl}" />`);
 });
 
-// Forzar QR nuevo reiniciando el socket
+// Clickeables (GET) y también POST por si luego los usas desde n8n
+app.get("/restart", async (req, res) => {
+  await restartBaileys();
+  res.send("ok");
+});
+
 app.post("/restart", async (req, res) => {
   await restartBaileys();
+  res.json({ ok: true });
+});
+
+app.get("/reset", async (req, res) => {
+  await resetSession();
+  res.send("ok");
+});
+
+app.post("/reset", async (req, res) => {
+  await resetSession();
   res.json({ ok: true });
 });
 
@@ -120,27 +153,3 @@ app.listen(port, "0.0.0.0", () => {
   console.log("Server listening on", port);
   startBaileys();
 });
-import fs from "fs/promises";
-
-async function resetSession() {
-  try { await sock?.logout?.(); } catch (_) {}
-  try { sock?.end?.(); } catch (_) {}
-  sock = null;
-  lastQr = null;
-
-  await fs.rm("/app/sessions", { recursive: true, force: true });
-  await fs.mkdir("/app/sessions", { recursive: true });
-
-  await startBaileys();
-}
-
-app.post("/reset", async (req, res) => {
-  await resetSession();
-  res.json({ ok: true });
-});
-app.get("/restart", async (req, res) => {
-  await restartBaileys();
-  res.send("ok");
-});
-
-
