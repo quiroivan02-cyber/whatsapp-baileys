@@ -1,8 +1,26 @@
 import express from "express";
-import * as baileys from "@whiskeysockets/baileys";
+import * as baileysNS from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
 
-const { default: makeWASocket, useMultiFileAuthState } = baileys;
+// Resolver exports (ESM/CJS) de Baileys
+const baileysMod = baileysNS?.default ?? baileysNS;
+
+// En algunas builds, el módulo exporta { makeWASocket, useMultiFileAuthState }
+// en otras, el export default es directamente la función
+const makeWASocket =
+  typeof baileysMod === "function"
+    ? baileysMod
+    : baileysMod?.makeWASocket ?? baileysMod?.default;
+
+const useMultiFileAuthState =
+  baileysMod?.useMultiFileAuthState ?? baileysNS?.useMultiFileAuthState;
+
+if (typeof makeWASocket !== "function") {
+  throw new Error("makeWASocket no es una función (revisa versión/import de Baileys)");
+}
+if (typeof useMultiFileAuthState !== "function") {
+  throw new Error("useMultiFileAuthState no es una función (revisa versión/import de Baileys)");
+}
 
 const app = express();
 app.use(express.json());
