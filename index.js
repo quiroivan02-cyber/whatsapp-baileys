@@ -120,3 +120,22 @@ app.listen(port, "0.0.0.0", () => {
   console.log("Server listening on", port);
   startBaileys();
 });
+import fs from "fs/promises";
+
+async function resetSession() {
+  try { await sock?.logout?.(); } catch (_) {}
+  try { sock?.end?.(); } catch (_) {}
+  sock = null;
+  lastQr = null;
+
+  await fs.rm("/app/sessions", { recursive: true, force: true });
+  await fs.mkdir("/app/sessions", { recursive: true });
+
+  await startBaileys();
+}
+
+app.post("/reset", async (req, res) => {
+  await resetSession();
+  res.json({ ok: true });
+});
+
