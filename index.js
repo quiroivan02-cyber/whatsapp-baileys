@@ -14,15 +14,19 @@ async function startBaileys() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection, qr, lastDisconnect } = update;
-    console.log("connection.update", {
-      connection,
-      hasQr: !!qr,
-      lastDisconnect: lastDisconnect?.error?.message,
-    });
-    if (qr) lastQr = qr;
+sock.ev.on("connection.update", (update) => {
+  const { connection, qr, lastDisconnect } = update;
+
+  console.log("connection.update", {
+    connection,
+    hasQr: !!qr,
+    statusCode: lastDisconnect?.error?.output?.statusCode,
+    error: lastDisconnect?.error?.message,
   });
+
+  if (qr) lastQr = qr;
+});
+
 }
 
 app.get("/", (req, res) => {
