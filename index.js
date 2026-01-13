@@ -1,6 +1,8 @@
 import express from "express";
-import makeWASocket, { useMultiFileAuthState } from "@whiskeysockets/baileys";
+import * as baileys from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
+
+const { default: makeWASocket, useMultiFileAuthState } = baileys;
 
 const app = express();
 app.use(express.json());
@@ -9,24 +11,24 @@ let lastQr = null;
 let sock = null;
 
 async function startBaileys() {
-  const { state, saveCreds } = await useMultiFileAuthState("/app/sessions"); // <- Volume
- sock = makeWASocket({ auth: state });
+  const { state, saveCreds } = await useMultiFileAuthState("/app/sessions");
+
+  sock = makeWASocket({ auth: state });
 
   sock.ev.on("creds.update", saveCreds);
 
-sock.ev.on("connection.update", (update) => {
-  const { connection, qr, lastDisconnect } = update;
+  sock.ev.on("connection.update", (update) => {
+    const { connection, qr, lastDisconnect } = update;
 
-  console.log("connection.update", {
-    connection,
-    hasQr: !!qr,
-    statusCode: lastDisconnect?.error?.output?.statusCode,
-    error: lastDisconnect?.error?.message,
+    console.log("connection.update", {
+      connection,
+      hasQr: !!qr,
+      statusCode: lastDisconnect?.error?.output?.statusCode,
+      error: lastDisconnect?.error?.message,
+    });
+
+    if (qr) lastQr = qr;
   });
-
-  if (qr) lastQr = qr;
-});
-
 }
 
 app.get("/", (req, res) => {
@@ -40,7 +42,6 @@ app.get("/qr", async (req, res) => {
   res.end(`<img src="${dataUrl}" />`);
 });
 
-// (Opcional) Endpoint para enviar mensajes desde n8n
 app.post("/send", async (req, res) => {
   try {
     const { to, text } = req.body;
@@ -53,8 +54,7 @@ app.post("/send", async (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, "::", () => {
+app.listen(port, "0.0.0.0", () => {
   console.log("Server listening on", port);
   startBaileys();
 });
-
