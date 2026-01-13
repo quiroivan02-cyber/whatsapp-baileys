@@ -10,8 +10,7 @@ let sock = null;
 
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState("/app/sessions"); // <- Volume
-  sock = makeWASocket({ auth: state, printQRInTerminal: true });
-
+ sock = makeWASocket({ auth: state });
 
   sock.ev.on("creds.update", saveCreds);
 
