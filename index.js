@@ -138,4 +138,9 @@ app.post("/reset", async (req, res) => {
   await resetSession();
   res.json({ ok: true });
 });
+app.get("/restart", async (req, res) => {
+  await restartBaileys();
+  res.send("ok");
+});
+
 
