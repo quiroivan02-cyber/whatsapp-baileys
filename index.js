@@ -57,8 +57,10 @@ async function emptyDir(dir) {
 // Cierre duro: evita sockets "zombies" durante restart
 async function hardCloseSocket() {
   try {
-    // Baileys usa WebSocket por debajo; cerrar ws ayuda a evitar "conflict"
     sock?.ws?.close?.();
+  } catch (_) {}
+  try {
+    sock?.ws?.terminate?.();
   } catch (_) {}
   try {
     sock?.end?.();
@@ -72,7 +74,6 @@ async function startBaileys() {
   sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
-    // opcional: reduce cambios de presencia en el teléfono
     markOnlineOnConnect: false,
   });
 
@@ -99,24 +100,67 @@ async function startBaileys() {
     if (connection === "close") {
       lastQr = null;
 
-      // 515 => restartRequired (normal después del QR)
       if (statusCode === DisconnectReason?.restartRequired) {
         console.log("restartRequired (515). Reiniciando socket...");
-        await restartBaileys({ delayMs: 5000 });
+        await restartBaileys({ delayMs: 10000 });
         return;
       }
 
-      // 401 => loggedOut/conflict: toca resetear
       if (statusCode === DisconnectReason?.loggedOut) {
         console.log("loggedOut (401). Usa /reset y vuelve a escanear el QR.");
         return;
       }
 
-      // Otros cierres: reintenta suave
       console.log("connection closed. Reintentando...");
       setTimeout(() => {
         restartBaileys({ delayMs: 3000 }).catch((e) => console.error("restartBaileys failed", e));
       }, 1000);
+    }
+  });
+
+  // ---- LISTENER DE MENSAJES (integración con n8n) ----
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+
+    for (const msg of messages) {
+      if (!msg.message) continue;
+      if (msg.key.fromMe) continue;
+
+      const jid = msg.key.remoteJid;
+      const text =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        "";
+
+      if (!jid || !text) continue;
+
+      console.log("📩 Mensaje recibido de", jid, ":", text);
+
+      const payload = {
+        jid,
+        text,
+        messageId: msg.key.id,
+        pushName: msg.pushName || null,
+        from: msg.key.participant || jid,
+      };
+
+      let reply = "No pude obtener respuesta del bot.";
+
+      try {
+        const r = await fetch(process.env.N8N_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await r.json();
+        if (data?.reply) reply = String(data.reply);
+      } catch (e) {
+        console.error("❌ n8n webhook error:", e?.message || e);
+      }
+
+      console.log("📤 Enviando respuesta:", reply);
+      await sock.sendMessage(jid, { text: reply });
     }
   });
 }
