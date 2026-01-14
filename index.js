@@ -18,8 +18,6 @@ const useMultiFileAuthState =
 const DisconnectReason =
   baileysMod?.DisconnectReason ?? baileysNS?.DisconnectReason;
 
-const Browsers = baileysMod?.Browsers ?? baileysNS?.Browsers;
-
 if (typeof makeWASocket !== "function") {
   throw new Error("makeWASocket no es una función (revisa versión/import de Baileys)");
 }
@@ -31,7 +29,7 @@ if (typeof useMultiFileAuthState !== "function") {
 const app = express();
 app.use(express.json());
 
-// Normaliza URLs con doble slash (//reset => /reset)
+// Normaliza URLs con doble slash
 app.use((req, _res, next) => {
   req.url = req.url.replace(/\/{2,}/g, "/");
   next();
@@ -44,19 +42,15 @@ app.get("/health", (_req, res) => res.sendStatus(200));
 let lastQr = null;
 let sock = null;
 let restarting = false;
-let pairingRequested = false;
 
 // ---- Helpers ----
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const withTimeout = (p, ms) => Promise.race([p, wait(ms)]);
 
 const asyncHandler = (fn) => (req, res, next) =>
-  Promise.resolve(fn(req, res, next)).catch(next);
+  Promise.resolve(fn(req, res, next)).catch(next); // patrón típico en Express para async [web:613]
 
-async function safeCloseSocket() {
-  try {
-    await withTimeout(sock?.logout?.(), 3000);
-  } catch (_) {}
+async function safeEndSocket() {
   try {
     sock?.end?.();
   } catch (_) {}
@@ -73,39 +67,15 @@ async function emptyDir(dir) {
   );
 }
 
-async function maybeRequestPairingCode({ connection, qr }) {
-  const phone = (process.env.PAIRING_NUMBER || "").replace(/\D/g, "");
-  if (!phone) return;
-  if (pairingRequested) return;
-  if (sock?.authState?.creds?.registered) return;
-
-  // Evita pedirlo ultra temprano
-  if (connection !== "connecting" && !qr) return;
-
-  pairingRequested = true;
-
-  try {
-    await wait(7000);
-    const code = await sock.requestPairingCode(phone);
-    console.log("PAIRING CODE:", code);
-  } catch (e) {
-    console.error("requestPairingCode failed:", e?.message || e);
-    pairingRequested = false;
-  }
-}
-
 async function startBaileys() {
-  const { state, saveCreds } = await useMultiFileAuthState("/app/sessions");
+  const { state, saveCreds } = await useMultiFileAuthState("/app/sessions"); // ejemplo recomendado [web:690][web:764]
 
   sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
-
-    // Importante para pairing-code: browser válido/lógico o falla el pair [web:793]
-    browser: Browsers?.macOS("Google Chrome"),
   });
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", saveCreds); // guardar sesión cuando se actualiza [web:690][web:764]
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, qr, lastDisconnect } = update;
@@ -118,21 +88,37 @@ async function startBaileys() {
       error: lastDisconnect?.error?.message,
     });
 
+    // QR disponible
     if (qr) lastQr = qr;
-    if (connection === "close") lastQr = null;
 
-    await maybeRequestPairingCode({ connection, qr });
-
-    // 515 => restartRequired
-    if (connection === "close" && statusCode === DisconnectReason?.restartRequired) {
-      setTimeout(() => {
-        restartBaileys().catch((e) => console.error("restartBaileys failed", e));
-      }, 1000);
+    // Conectado
+    if (connection === "open") {
+      lastQr = null;
+      console.log("connected to WA");
     }
 
-    // 401 => loggedOut
-    if (connection === "close" && statusCode === DisconnectReason?.loggedOut) {
-      console.log("Logged out (401). Usa /reset y vuelve a vincular.");
+    // Cerrado
+    if (connection === "close") {
+      lastQr = null;
+
+      // 515 => restartRequired: recrear socket (sin logout) [web:554]
+      if (statusCode === DisconnectReason?.restartRequired) {
+        console.log("restartRequired (515). Reiniciando socket...");
+        await restartBaileys();
+        return;
+      }
+
+      // 401 => loggedOut: toca borrar sesión y escanear QR de nuevo [web:554]
+      if (statusCode === DisconnectReason?.loggedOut) {
+        console.log("loggedOut (401). Usa /reset y vuelve a escanear el QR.");
+        return;
+      }
+
+      // Otros cierres: reintenta con backoff corto
+      console.log("connection closed. Reintentando...");
+      setTimeout(() => {
+        restartBaileys().catch((e) => console.error("restartBaileys failed", e));
+      }, 1500);
     }
   });
 }
@@ -143,7 +129,7 @@ async function restartBaileys() {
 
   try {
     lastQr = null;
-    await safeCloseSocket();
+    await safeEndSocket(); // importante: NO logout aquí
     await startBaileys();
   } finally {
     restarting = false;
@@ -156,13 +142,14 @@ async function resetSession() {
 
   try {
     lastQr = null;
-    pairingRequested = false;
 
-    await safeCloseSocket();
+    // Cierra socket
+    await withTimeout(Promise.resolve(safeEndSocket()), 3000);
 
-    // NO borres /app/sessions (volumen/mount). Vacía su contenido.
+    // Vacía credenciales (sin borrar el mount completo)
     await emptyDir("/app/sessions");
 
+    // Arranca de cero (mostrará QR)
     await startBaileys();
   } finally {
     restarting = false;
@@ -178,7 +165,9 @@ app.get(
   "/qr",
   asyncHandler(async (_req, res) => {
     if (!lastQr) {
-      return res.status(404).send("Aun no hay QR. Revisa Logs o usa /restart o /reset.");
+      return res
+        .status(404)
+        .send("Aun no hay QR. Abre /reset y revisa de nuevo.");
     }
     const dataUrl = await QRCode.toDataURL(lastQr);
     res.setHeader("Content-Type", "text/html");
@@ -226,4 +215,3 @@ app.listen(port, "0.0.0.0", () => {
   console.log("Server listening on", port);
   startBaileys().catch((e) => console.error("startBaileys failed", e));
 });
-
