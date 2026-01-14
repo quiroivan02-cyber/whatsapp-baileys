@@ -129,12 +129,14 @@ async function restartBaileys() {
 
   try {
     lastQr = null;
-    await safeEndSocket(); // importante: NO logout aquí
+    await safeEndSocket();
+    await wait(3000); // deja morir el socket anterior para evitar "conflict"
     await startBaileys();
   } finally {
     restarting = false;
   }
 }
+
 
 async function resetSession() {
   if (restarting) return;
