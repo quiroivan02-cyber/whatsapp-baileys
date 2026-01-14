@@ -154,7 +154,9 @@ async function startBaileys() {
         });
 
         const data = await r.json();
-        if (data?.reply) reply = String(data.reply);
+        // ⬇️ CAMBIO AQUÍ: buscar 'message' primero, luego 'reply'
+        reply = data?.message || data?.reply || "No pude obtener respuesta del bot.";
+        console.log("✅ Respuesta de n8n recibida:", reply);
       } catch (e) {
         console.error("❌ n8n webhook error:", e?.message || e);
       }
