@@ -18,6 +18,8 @@ const useMultiFileAuthState =
 const DisconnectReason =
   baileysMod?.DisconnectReason ?? baileysNS?.DisconnectReason;
 
+const Browsers = baileysMod?.Browsers ?? baileysNS?.Browsers;
+
 if (typeof makeWASocket !== "function") {
   throw new Error("makeWASocket no es una función (revisa versión/import de Baileys)");
 }
@@ -52,7 +54,6 @@ const asyncHandler = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
 async function safeCloseSocket() {
-  // Evita cuelgues en logout con sesiones malas
   try {
     await withTimeout(sock?.logout?.(), 3000);
   } catch (_) {}
@@ -73,27 +74,23 @@ async function emptyDir(dir) {
 }
 
 async function maybeRequestPairingCode({ connection, qr }) {
-  // Pide pairing code SOLO si:
-  // - hay PAIRING_NUMBER
-  // - la sesión NO está registrada
-  // - aún no lo pedimos
   const phone = (process.env.PAIRING_NUMBER || "").replace(/\D/g, "");
   if (!phone) return;
   if (pairingRequested) return;
   if (sock?.authState?.creds?.registered) return;
 
-  // No lo pidas ultra temprano para evitar "Connection Closed (428)"
+  // Evita pedirlo ultra temprano
   if (connection !== "connecting" && !qr) return;
 
   pairingRequested = true;
 
   try {
-    await wait(7000); // reduce el 428 "Connection Closed" al pedir el pairing [ver nota abajo]
+    await wait(7000);
     const code = await sock.requestPairingCode(phone);
     console.log("PAIRING CODE:", code);
   } catch (e) {
     console.error("requestPairingCode failed:", e?.message || e);
-    pairingRequested = false; // permite reintentar en el próximo update si hizo falta
+    pairingRequested = false;
   }
 }
 
@@ -103,6 +100,9 @@ async function startBaileys() {
   sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
+
+    // Importante para pairing-code: browser válido/lógico o falla el pair [web:793]
+    browser: Browsers?.macOS("Google Chrome"),
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -123,14 +123,14 @@ async function startBaileys() {
 
     await maybeRequestPairingCode({ connection, qr });
 
-    // 515 => restartRequired: Baileys pide recrear socket [DisconnectReason]
+    // 515 => restartRequired
     if (connection === "close" && statusCode === DisconnectReason?.restartRequired) {
       setTimeout(() => {
         restartBaileys().catch((e) => console.error("restartBaileys failed", e));
       }, 1000);
     }
 
-    // 401 => loggedOut: toca /reset y re-vincular
+    // 401 => loggedOut
     if (connection === "close" && statusCode === DisconnectReason?.loggedOut) {
       console.log("Logged out (401). Usa /reset y vuelve a vincular.");
     }
@@ -160,7 +160,7 @@ async function resetSession() {
 
     await safeCloseSocket();
 
-    // NO borres /app/sessions (es mount/volume), vacía su contenido
+    // NO borres /app/sessions (volumen/mount). Vacía su contenido.
     await emptyDir("/app/sessions");
 
     await startBaileys();
@@ -226,3 +226,4 @@ app.listen(port, "0.0.0.0", () => {
   console.log("Server listening on", port);
   startBaileys().catch((e) => console.error("startBaileys failed", e));
 });
+
