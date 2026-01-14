@@ -15,6 +15,9 @@ const makeWASocket =
 const useMultiFileAuthState =
   baileysMod?.useMultiFileAuthState ?? baileysNS?.useMultiFileAuthState;
 
+const DisconnectReason =
+  baileysMod?.DisconnectReason ?? baileysNS?.DisconnectReason;
+
 if (typeof makeWASocket !== "function") {
   throw new Error("makeWASocket no es una función (revisa versión/import de Baileys)");
 }
@@ -39,6 +42,7 @@ app.get("/health", (_req, res) => res.sendStatus(200));
 let lastQr = null;
 let sock = null;
 let restarting = false;
+let pairingRequested = false;
 
 // ---- Helpers ----
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -68,22 +72,55 @@ async function emptyDir(dir) {
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState("/app/sessions");
 
-  sock = makeWASocket({ auth: state });
+  sock = makeWASocket({
+    auth: state,
+    // importante: para pairing code, que NO imprima QR en terminal
+    printQRInTerminal: false,
+  });
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (update) => {
+  sock.ev.on("connection.update", async (update) => {
     const { connection, qr, lastDisconnect } = update;
+    const statusCode = lastDisconnect?.error?.output?.statusCode;
 
     console.log("connection.update", {
       connection,
       hasQr: !!qr,
-      statusCode: lastDisconnect?.error?.output?.statusCode,
+      statusCode,
       error: lastDisconnect?.error?.message,
     });
 
     if (qr) lastQr = qr;
     if (connection === "close") lastQr = null;
+
+    // Pedir pairing code (solo si NO está registrado)
+    if (
+      !pairingRequested &&
+      !sock.authState.creds.registered &&
+      (connection === "connecting" || !!qr)
+    ) {
+      pairingRequested = true;
+      const phone = (process.env.PAIRING_NUMBER || "").replace(/\D/g, "");
+      if (phone) {
+        const code = await sock.requestPairingCode(phone);
+        console.log("PAIRING CODE:", code);
+      } else {
+        pairingRequested = false;
+      }
+    }
+
+    // 515 => restartRequired: recrea socket
+    if (connection === "close" && statusCode === DisconnectReason?.restartRequired) {
+      setTimeout(() => {
+        restartBaileys().catch((e) => console.error("restartBaileys failed", e));
+      }, 1000);
+    }
+
+    // 401 => loggedOut: toca /reset y volver a vincular
+    if (connection === "close" && statusCode === DisconnectReason?.loggedOut) {
+      console.log("Logged out (401). Usa /reset y vuelve a vincular.");
+    }
   });
 }
 
@@ -106,9 +143,11 @@ async function resetSession() {
 
   try {
     lastQr = null;
+    pairingRequested = false;
+
     await safeCloseSocket();
 
-    // En vez de borrar /app/sessions (volumen/mount), vacía su contenido
+    // Vacía el volumen (no intentes borrar /app/sessions completo)
     await emptyDir("/app/sessions");
 
     await startBaileys();
@@ -147,22 +186,6 @@ app.get(
   asyncHandler(async (_req, res) => {
     await resetSession();
     res.send("ok");
-  })
-);
-
-app.post(
-  "/restart",
-  asyncHandler(async (_req, res) => {
-    await restartBaileys();
-    res.json({ ok: true });
-  })
-);
-
-app.post(
-  "/reset",
-  asyncHandler(async (_req, res) => {
-    await resetSession();
-    res.json({ ok: true });
   })
 );
 
