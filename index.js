@@ -1,6 +1,7 @@
 import express from "express";
 import * as baileysNS from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
+import path from "path";
 import fs from "fs/promises";
 
 // ---- Baileys import robusto (ESM/CJS) ----
@@ -47,7 +48,6 @@ const asyncHandler = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
 async function safeCloseSocket() {
-  // Evita cuelgues en logout cuando la sesión está mala
   try {
     await withTimeout(sock?.logout?.(), 3000);
   } catch (_) {}
@@ -57,8 +57,17 @@ async function safeCloseSocket() {
   sock = null;
 }
 
+async function emptyDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+  const items = await fs.readdir(dir);
+  await Promise.all(
+    items.map((name) => fs.rm(path.join(dir, name), { recursive: true, force: true }))
+  );
+}
+
 async function startBaileys() {
-  const { state, saveCreds } = await useMultiFileAuthState("/app/sessions"); // Volume
+  const { state, saveCreds } = await useMultiFileAuthState("/app/sessions");
+
   sock = makeWASocket({ auth: state });
 
   sock.ev.on("creds.update", saveCreds);
@@ -74,8 +83,6 @@ async function startBaileys() {
     });
 
     if (qr) lastQr = qr;
-
-    // Si se cierra, borra QR para que /qr no muestre uno viejo
     if (connection === "close") lastQr = null;
   });
 }
@@ -83,6 +90,7 @@ async function startBaileys() {
 async function restartBaileys() {
   if (restarting) return;
   restarting = true;
+
   try {
     lastQr = null;
     await safeCloseSocket();
@@ -95,13 +103,13 @@ async function restartBaileys() {
 async function resetSession() {
   if (restarting) return;
   restarting = true;
+
   try {
     lastQr = null;
     await safeCloseSocket();
 
-    // Borra credenciales guardadas y crea carpeta limpia
-    await fs.rm("/app/sessions", { recursive: true, force: true });
-    await fs.mkdir("/app/sessions", { recursive: true });
+    // En vez de borrar /app/sessions (volumen/mount), vacía su contenido
+    await emptyDir("/app/sessions");
 
     await startBaileys();
   } finally {
@@ -118,9 +126,7 @@ app.get(
   "/qr",
   asyncHandler(async (_req, res) => {
     if (!lastQr) {
-      return res
-        .status(404)
-        .send("Aun no hay QR. Revisa Logs o usa /restart o /reset.");
+      return res.status(404).send("Aun no hay QR. Revisa Logs o usa /restart o /reset.");
     }
     const dataUrl = await QRCode.toDataURL(lastQr);
     res.setHeader("Content-Type", "text/html");
@@ -128,7 +134,6 @@ app.get(
   })
 );
 
-// Clickeables en navegador
 app.get(
   "/restart",
   asyncHandler(async (_req, res) => {
@@ -145,7 +150,6 @@ app.get(
   })
 );
 
-// Por si lo llamas desde n8n (POST)
 app.post(
   "/restart",
   asyncHandler(async (_req, res) => {
@@ -186,4 +190,3 @@ app.listen(port, "0.0.0.0", () => {
   console.log("Server listening on", port);
   startBaileys().catch((e) => console.error("startBaileys failed", e));
 });
-
