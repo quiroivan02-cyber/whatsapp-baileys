@@ -176,20 +176,6 @@ async function procesarMensaje(msg) {
     
     // Detectar tipo de solicitud
     tipoSolicitud = detectarTipoSolicitud(texto);
-  }  // Conversación normal con IA (CON MEMORIA)
-  else {
-    // Agregar mensaje del usuario al historial
-    agregarAlHistorial(telefono, 'user', `${nombre} dice: ${texto}`);
-    
-    // Obtener respuesta con contexto
-    const historial = obtenerHistorial(telefono);
-    respuesta = await consultarGroq(texto, nombre, historial);
-    
-    // Agregar respuesta de la IA al historial
-    agregarAlHistorial(telefono, 'assistant', respuesta);
-    
-    // Detectar tipo de solicitud
-    tipoSolicitud = detectarTipoSolicitud(texto);
   }
 
   // ========================================
@@ -233,35 +219,6 @@ async function procesarMensaje(msg) {
   }
 
   // Enviar respuesta limpia
-  console.log('📤 Enviando respuesta...');
-  await sock.sendMessage(jid, { text: respuestaLimpia });
-}
-
-
-  // ========================================
-  // DETECCIÓN DE CITAS AGENDADAS
-  // ========================================
-  
-  // Detectar si la respuesta contiene el marcador de cita
-  const citaAgendada = respuesta.includes('[CITA_AGENDADA]');
-  
-  // Limpiar la respuesta antes de enviar (eliminar marcador)
-  const respuestaLimpia = respuesta.replace('[CITA_AGENDADA]', '').trim();
-  
-  // Preparar detalles para Google Sheets
-  let detallesCita = '';
-  
-  // Si se detectó una cita, cambiar el tipo de solicitud y guardar detalles
-  if (citaAgendada) {
-    tipoSolicitud = '🗓️ Cita Agendada';
-    detallesCita = respuestaLimpia; // Guardar toda la respuesta como detalle
-    console.log('📅 Cita detectada y registrada');
-  }
-
-  // Guardar en Google Sheets (con o sin detalles)
-  await guardarEnGoogleSheet(nombre, telefono, tipoSolicitud, detallesCita);
-
-  // Enviar respuesta limpia (sin marcador)
   console.log('📤 Enviando respuesta...');
   await sock.sendMessage(jid, { text: respuestaLimpia });
 }
