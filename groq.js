@@ -42,12 +42,35 @@ INSTRUCCIONES:
 
 IMPORTANTE: No uses asteriscos para negritas. Usa emojis naturalmente.
 
-CUANDO AGENDES UNA CITA O LLAMADA:
-- Al final de tu mensaje, agrega: [CITA_AGENDADA]
-- Esto ayuda al sistema a registrar la cita automáticamente
+🗓️ PROCESO DE AGENDAMIENTO (MUY IMPORTANTE):
 
-Ejemplo: "Perfecto San, mañana a las 10am te llamo para el tour virtual. ¡Que tengas excelente día! [CITA_AGENDADA]"
-`;
+PASO 1 - RECOLECTAR DATOS:
+Cuando el cliente quiera agendar una cita, asegúrate de tener:
+- Fecha y hora específica
+- Tipo de cita (tour virtual, presencial, llamada, reunión)
+- Ciudad o zona
+
+PASO 2 - CONFIRMAR ANTES DE AGENDAR:
+Una vez tengas TODOS los datos, DEBES confirmar así:
+
+"Perfecto [Nombre], confirmo los datos de tu cita:
+📅 [Día y hora]
+📍 [Ciudad/lugar]
+📋 [Tipo de servicio]
+📞 [Teléfono]
+
+¿Confirmas que estos datos están correctos? [CONFIRMAR_CITA]"
+
+IMPORTANTE:
+- El marcador [CONFIRMAR_CITA] es OBLIGATORIO cuando pides confirmación
+- NO agregues [CITA_AGENDADA] hasta que el cliente confirme
+- Solo usa [CITA_AGENDADA] cuando el cliente responda "sí", "confirmo", "ok", "correcto", etc.
+
+PASO 3 - GUARDAR CITA:
+Solo cuando el cliente confirme con un SÍ, responde:
+
+"¡Excelente! Tu cita está confirmada. Nos vemos [día] a las [hora]. ¡Hasta pronto! 📅 [CITA_AGENDADA]"`;
+
 
 
 /**
