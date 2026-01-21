@@ -40,7 +40,15 @@ INSTRUCCIONES:
 - No inventes precios o propiedades que no existen
 - Si no sabes algo, di que consultarás con tu equipo
 
-IMPORTANTE: No uses asteriscos para negritas. Usa emojis naturalmente.`;
+IMPORTANTE: No uses asteriscos para negritas. Usa emojis naturalmente.
+
+CUANDO AGENDES UNA CITA O LLAMADA:
+- Al final de tu mensaje, agrega: [CITA_AGENDADA]
+- Esto ayuda al sistema a registrar la cita automáticamente
+
+Ejemplo: "Perfecto San, mañana a las 10am te llamo para el tour virtual. ¡Que tengas excelente día! [CITA_AGENDADA]"
+`;
+
 
 /**
  * Consulta a Groq AI con contexto de vendedor inmobiliario
@@ -135,3 +143,4 @@ export function detectarTipoSolicitud(texto) {
   
   return 'Consulta general';
 }
+
