@@ -46,16 +46,26 @@ IMPORTANTE: No uses asteriscos para negritas. Usa emojis naturalmente.`;
  * Consulta a Groq AI con contexto de vendedor inmobiliario
  * @param {string} mensajeUsuario - Mensaje del usuario
  * @param {string} nombreUsuario - Nombre del usuario
+ * @param {Array} historial - Historial de conversación
  * @returns {Promise<string>} Respuesta generada
  */
-export async function consultarGroq(mensajeUsuario, nombreUsuario = 'Cliente') {
+export async function consultarGroq(mensajeUsuario, nombreUsuario = 'Cliente', historial = []) {
   if (!config.GROQ_API_KEY) {
     console.log('⚠️ GROQ_API_KEY no configurada');
     return 'Disculpa, estoy teniendo problemas técnicos. ¿Podrías intentar más tarde?';
   }
   
   try {
-    console.log('🤖 Consultando Groq AI...');
+    console.log('🤖 Consultando Groq AI con historial...');
+    
+    // Construir mensajes con historial
+    const messages = [
+      {
+        role: 'system',
+        content: SYSTEM_PROMPT
+      },
+      ...historial, // ← Incluir historial de conversación
+    ];
     
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -65,16 +75,7 @@ export async function consultarGroq(mensajeUsuario, nombreUsuario = 'Cliente') {
       },
       body: JSON.stringify({
         model: config.GROQ_MODEL,
-        messages: [
-          {
-            role: 'system',
-            content: SYSTEM_PROMPT
-          },
-          {
-            role: 'user',
-            content: `${nombreUsuario} dice: ${mensajeUsuario}`
-          }
-        ],
+        messages: messages,
         temperature: 0.7,
         max_tokens: 300,
         top_p: 1,
@@ -99,6 +100,7 @@ export async function consultarGroq(mensajeUsuario, nombreUsuario = 'Cliente') {
     return 'Disculpa, estoy teniendo un problema técnico. ¿Podrías escribirme en unos minutos? 🙏';
   }
 }
+
 
 /**
  * Detecta el tipo de solicitud basado en palabras clave
