@@ -176,7 +176,67 @@ async function procesarMensaje(msg) {
     
     // Detectar tipo de solicitud
     tipoSolicitud = detectarTipoSolicitud(texto);
+  }  // Conversación normal con IA (CON MEMORIA)
+  else {
+    // Agregar mensaje del usuario al historial
+    agregarAlHistorial(telefono, 'user', `${nombre} dice: ${texto}`);
+    
+    // Obtener respuesta con contexto
+    const historial = obtenerHistorial(telefono);
+    respuesta = await consultarGroq(texto, nombre, historial);
+    
+    // Agregar respuesta de la IA al historial
+    agregarAlHistorial(telefono, 'assistant', respuesta);
+    
+    // Detectar tipo de solicitud
+    tipoSolicitud = detectarTipoSolicitud(texto);
   }
+
+  // ========================================
+  // SISTEMA DE CONFIRMACIÓN DE CITAS
+  // ========================================
+  
+  // 1. Detectar si está pidiendo confirmación
+  const solicitandoConfirmacion = respuesta.includes('[CONFIRMAR_CITA]');
+  
+  // 2. Detectar si la cita fue confirmada por el usuario
+  const citaConfirmada = respuesta.includes('[CITA_AGENDADA]');
+  
+  // Limpiar marcadores de la respuesta
+  let respuestaLimpia = respuesta
+    .replace('[CONFIRMAR_CITA]', '')
+    .replace('[CITA_AGENDADA]', '')
+    .trim();
+  
+  // Variables para guardar
+  let detallesCita = '';
+  let guardarEnSheet = false;
+  
+  // Si está solicitando confirmación, NO guardar aún
+  if (solicitandoConfirmacion) {
+    console.log('⏳ Esperando confirmación del usuario...');
+    tipoSolicitud = 'Confirmando cita';
+    guardarEnSheet = false; // No guardar aún
+  }
+  
+  // Si la cita fue confirmada, guardar
+  if (citaConfirmada) {
+    tipoSolicitud = '🗓️ Cita Agendada';
+    detallesCita = respuestaLimpia;
+    guardarEnSheet = true; // Sí guardar
+    console.log('✅ Cita confirmada por el usuario');
+  }
+
+  // Guardar en Google Sheets SOLO si hay confirmación
+  if (guardarEnSheet) {
+    await guardarEnGoogleSheet(nombre, telefono, tipoSolicitud, detallesCita);
+  }
+
+  // Enviar respuesta limpia
+  console.log('📤 Enviando respuesta...');
+  await sock.sendMessage(jid, { text: respuestaLimpia });
+}
+
 
   // ========================================
   // DETECCIÓN DE CITAS AGENDADAS
