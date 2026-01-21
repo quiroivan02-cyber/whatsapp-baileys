@@ -7,6 +7,54 @@ import fs from "fs/promises";
 import { config } from './config.js';
 import { guardarEnGoogleSheet } from './sheets.js';
 import { consultarGroq, detectarTipoSolicitud } from './groq.js';
+// ========================================
+// MEMORIA DE CONVERSACIONES
+// ========================================
+
+/**
+ * Almacena el historial de conversación por usuario
+ * Formato: { 'numero': [{ role: 'user', content: 'mensaje' }] }
+ */
+const conversaciones = new Map();
+
+/**
+ * Límite de mensajes a recordar por usuario
+ */
+const MAX_MENSAJES_HISTORIAL = 10;
+
+/**
+ * Obtiene el historial de un usuario
+ */
+function obtenerHistorial(telefono) {
+  if (!conversaciones.has(telefono)) {
+    conversaciones.set(telefono, []);
+  }
+  return conversaciones.get(telefono);
+}
+
+/**
+ * Agrega un mensaje al historial
+ */
+function agregarAlHistorial(telefono, role, content) {
+  const historial = obtenerHistorial(telefono);
+  historial.push({ role, content });
+  
+  // Mantener solo los últimos MAX_MENSAJES_HISTORIAL mensajes
+  if (historial.length > MAX_MENSAJES_HISTORIAL * 2) {
+    historial.shift(); // Eliminar el más antiguo
+    historial.shift();
+  }
+  
+  conversaciones.set(telefono, historial);
+}
+
+/**
+ * Limpia el historial de un usuario
+ */
+function limpiarHistorial(telefono) {
+  conversaciones.delete(telefono);
+}
+
 
 // Configuración de Baileys
 const baileysMod = baileysNS?.default ?? baileysNS;
