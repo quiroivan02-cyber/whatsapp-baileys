@@ -101,7 +101,6 @@ async function hardCloseSocket() {
   sock = null;
   isConnected = false;
 }
-
 /**
  * Procesa los mensajes recibidos
  */
@@ -178,13 +177,30 @@ async function procesarMensaje(msg) {
     tipoSolicitud = detectarTipoSolicitud(texto);
   }
 
+  // ========================================
+  // DETECCIÓN DE CITAS AGENDADAS
+  // ========================================
+  
+  // Detectar si la respuesta contiene el marcador de cita
+  const citaAgendada = respuesta.includes('[CITA_AGENDADA]');
+  
+  // Limpiar la respuesta antes de enviar (eliminar marcador)
+  const respuestaLimpia = respuesta.replace('[CITA_AGENDADA]', '').trim();
+  
+  // Si se detectó una cita, cambiar el tipo de solicitud
+  if (citaAgendada) {
+    tipoSolicitud = '🗓️ Cita Agendada';
+    console.log('📅 Cita detectada y registrada');
+  }
+
   // Guardar en Google Sheets
   await guardarEnGoogleSheet(nombre, telefono, tipoSolicitud);
 
-  // Enviar respuesta
+  // Enviar respuesta limpia (sin marcador)
   console.log('📤 Enviando respuesta...');
-  await sock.sendMessage(jid, { text: respuesta });
+  await sock.sendMessage(jid, { text: respuestaLimpia });
 }
+
 
 /**
  * Inicia la conexión de WhatsApp
