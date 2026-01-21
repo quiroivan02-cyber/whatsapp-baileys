@@ -7,6 +7,7 @@ import fs from "fs/promises";
 import { config } from './config.js';
 import { guardarEnGoogleSheet } from './sheets.js';
 import { consultarGroq, detectarTipoSolicitud } from './groq.js';
+
 // ========================================
 // MEMORIA DE CONVERSACIONES
 // ========================================
@@ -54,7 +55,6 @@ function agregarAlHistorial(telefono, role, content) {
 function limpiarHistorial(telefono) {
   conversaciones.delete(telefono);
 }
-
 
 // Configuración de Baileys
 const baileysMod = baileysNS?.default ?? baileysNS;
@@ -184,7 +184,6 @@ async function procesarMensaje(msg) {
   // Enviar respuesta
   console.log('📤 Enviando respuesta...');
   await sock.sendMessage(jid, { text: respuesta });
-}
 }
 
 /**
