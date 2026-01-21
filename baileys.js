@@ -124,29 +124,57 @@ async function procesarMensaje(msg) {
   let tipoSolicitud = 'Consulta general';
 
   // Comandos especiales
-  if (texto.toLowerCase() === '!menu' || texto.toLowerCase() === 'menu') {
+  const textoLower = texto.toLowerCase().trim();
+  
+  // Comando para reiniciar conversación
+  if (textoLower === '!reset' || textoLower === 'reiniciar') {
+    limpiarHistorial(telefono);
+    respuesta = `✅ Conversación reiniciada.\n\nHola ${nombre}, soy ${config.BOT_CONFIG.vendedor} de ${config.BOT_CONFIG.empresa}.\n\n¿En qué puedo ayudarte?`;
+    tipoSolicitud = 'Reinicio';
+  }
+  // Menú
+  else if (textoLower === '!menu' || textoLower === 'menu') {
+    limpiarHistorial(telefono);
     respuesta = `🏠 *${config.BOT_CONFIG.empresa}*\n\nHola ${nombre}! Soy ${config.BOT_CONFIG.vendedor}, tu asesora inmobiliaria. 😊\n\n¿En qué puedo ayudarte?\n\n1️⃣ Comprar propiedad\n2️⃣ Vender propiedad\n3️⃣ Arrendar\n4️⃣ Ver catálogo\n\nEscribe el número o cuéntame qué buscas.`;
     tipoSolicitud = 'Menú';
   }
+  // Opción 1: Compra
   else if (texto === '1') {
+    limpiarHistorial(telefono);
     respuesta = `¡Excelente decisión! 🎉\n\n¿Qué tipo de propiedad buscas?\n- Apartamento\n- Casa\n- Local comercial\n\n¿Y cuál es tu presupuesto aproximado?`;
     tipoSolicitud = 'Compra';
   }
+  // Opción 2: Venta
   else if (texto === '2') {
+    limpiarHistorial(telefono);
     respuesta = `¡Perfecto! Te ayudo a vender tu propiedad. 💼\n\n¿Qué tipo de propiedad es?\n¿En qué zona está ubicada?\n¿Cuál es el valor aproximado?`;
     tipoSolicitud = 'Venta';
   }
+  // Opción 3: Arriendo
   else if (texto === '3') {
-    respuesta = `¡Claro! 🏢\n\n¿Buscas arrendar o tienes una propiedad para arrendar?\n\nCuéntame más detalles.`;
+    limpiarHistorial(telefono);
+    respuesta = `¡Claro! 🏢\n\n¿Buscas arrendar o tienes una propiedad para arrendar?\n\nCuéntame más detalles: zona, presupuesto, tipo de propiedad.`;
     tipoSolicitud = 'Arriendo';
   }
+  // Opción 4: Catálogo
   else if (texto === '4') {
+    limpiarHistorial(telefono);
     respuesta = `📱 Te envío nuestro catálogo digital.\n\n¿Tienes alguna preferencia?\n- Zona específica\n- Rango de precio\n- Número de habitaciones\n\nCuéntame para mostrarte las mejores opciones.`;
     tipoSolicitud = 'Catálogo';
   }
+  // Conversación normal con IA (CON MEMORIA)
   else {
-    // Usar Groq AI
-    respuesta = await consultarGroq(texto, nombre);
+    // Agregar mensaje del usuario al historial
+    agregarAlHistorial(telefono, 'user', `${nombre} dice: ${texto}`);
+    
+    // Obtener respuesta con contexto
+    const historial = obtenerHistorial(telefono);
+    respuesta = await consultarGroq(texto, nombre, historial);
+    
+    // Agregar respuesta de la IA al historial
+    agregarAlHistorial(telefono, 'assistant', respuesta);
+    
+    // Detectar tipo de solicitud
     tipoSolicitud = detectarTipoSolicitud(texto);
   }
 
@@ -156,6 +184,7 @@ async function procesarMensaje(msg) {
   // Enviar respuesta
   console.log('📤 Enviando respuesta...');
   await sock.sendMessage(jid, { text: respuesta });
+}
 }
 
 /**
