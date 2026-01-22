@@ -95,11 +95,82 @@ async function emptyDir(dir) {
 }
 
 async function hardCloseSocket() {
-  try { sock?.ws?.close?.(); } catch (_) {}
+  try { 
+    detenerHeartbeat(); // Detener heartbeat antes de cerrar
+    sock?.ws?.close?.(); 
+  } catch (_) {}
   try { sock?.ws?.terminate?.(); } catch (_) {}
   try { sock?.end?.(); } catch (_) {}
   sock = null;
   isConnected = false;
+}
+
+// ========================================
+// SISTEMA DE KEEP-ALIVE
+// ========================================
+
+let heartbeatInterval = null;
+let monitorInterval = null;
+
+/**
+ * Inicia el heartbeat para mantener conexión activa
+ */
+function iniciarHeartbeat() {
+  if (heartbeatInterval) return;
+  
+  console.log('💓 Iniciando heartbeat...');
+  
+  heartbeatInterval = setInterval(() => {
+    if (sock && isConnected) {
+      console.log('💓 Heartbeat - Conexión activa');
+      
+      // Enviar presencia para mantener activo
+      sock.sendPresenceUpdate('available').catch((err) => {
+        console.log('⚠️ Error en heartbeat:', err.message);
+      });
+    }
+  }, 60000); // Cada 60 segundos
+}
+
+/**
+ * Detiene el heartbeat
+ */
+function detenerHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+    console.log('💔 Heartbeat detenido');
+  }
+}
+
+/**
+ * Monitor de conexión - verifica estado cada 2 minutos
+ */
+function iniciarMonitor() {
+  if (monitorInterval) return;
+  
+  console.log('🔍 Iniciando monitor de conexión...');
+  
+  monitorInterval = setInterval(async () => {
+    console.log('🔍 Verificando estado de conexión...');
+    
+    // Si el socket existe pero no está conectado, intentar reconectar
+    if (sock && !isConnected && !restarting) {
+      console.log('⚠️ Detectada desconexión silenciosa. Reconectando...');
+      await restartBaileys({ delayMs: 5000 });
+    }
+  }, 120000); // Cada 2 minutos
+}
+
+/**
+ * Detiene el monitor
+ */
+function detenerMonitor() {
+  if (monitorInterval) {
+    clearInterval(monitorInterval);
+    monitorInterval = null;
+    console.log('🔍 Monitor detenido');
+  }
 }
 
 /**
@@ -233,6 +304,12 @@ export async function startBaileys() {
     auth: state,
     printQRInTerminal: false,
     markOnlineOnConnect: false,
+    connectTimeoutMs: 60000, // 60 segundos
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 30000, // Keep-alive cada 30 seg
+    retryRequestDelayMs: 250,
+    maxMsgRetryCount: 5,
+    browser: ['Inmobiliaria Prime Bot', 'Chrome', '120.0.0'],
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -252,11 +329,19 @@ export async function startBaileys() {
       lastQr = null;
       isConnected = true;
       console.log("✅ Conectado a WhatsApp");
+      
+      // Iniciar sistemas de mantenimiento
+      iniciarHeartbeat();
+      iniciarMonitor();
     }
 
     if (connection === "close") {
       lastQr = null;
       isConnected = false;
+      
+      // Detener sistemas de mantenimiento
+      detenerHeartbeat();
+      detenerMonitor();
 
       if (statusCode === DisconnectReason?.restartRequired) {
         console.log("🔄 Restart requerido");
