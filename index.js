@@ -154,6 +154,34 @@ app.use((err, _req, res, _next) => {
   console.error("❌ ERROR:", err);
   res.status(500).send(err?.message || "Error interno");
 });
+// ========================================
+// HEALTH CHECK Y MONITORING
+// ========================================
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const status = {
+    status: isConnected ? 'connected' : 'disconnected',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    memory: process.memoryUsage()
+  };
+  
+  res.json(status);
+});
+
+// Ping interno cada 5 minutos para mantener activo
+setInterval(async () => {
+  console.log('🏓 Ping interno - Manteniendo servicio activo');
+  
+  // Si no está conectado, intentar reconectar
+  if (!isConnected && sock) {
+    console.log('⚠️ Detectada desconexión, intentando reconectar...');
+    await restartBaileys({ delayMs: 5000 });
+  }
+}, 300000); // Cada 5 minutos
+
+console.log('🏥 Health check disponible en /health');
 
 // ========================================
 // INICIAR SERVIDOR
