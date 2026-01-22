@@ -7,6 +7,9 @@ import fs from "fs/promises";
 import { config } from './config.js';
 import { guardarEnGoogleSheet } from './sheets.js';
 import { consultarGroq, detectarTipoSolicitud } from './groq.js';
+import { obtenerPropiedadesArriendo, obtenerPropiedadesVenta, formatearPropiedades } from './propiedades.js';
+import { consultarGroq, detectarTipoSolicitud, extraerParametrosBusqueda } from './groq.js';
+
 
 // ========================================
 // MEMORIA DE CONVERSACIONES
@@ -176,6 +179,9 @@ function detenerMonitor() {
 /**
  * Procesa los mensajes recibidos
  */
+/**
+ * Procesa los mensajes recibidos
+ */
 async function procesarMensaje(msg) {
   if (!msg.message || msg.key.fromMe) return;
 
@@ -212,7 +218,7 @@ async function procesarMensaje(msg) {
   // Opción 1: Compra
   else if (texto === '1') {
     limpiarHistorial(telefono);
-    respuesta = `¡Excelente decisión! 🎉\n\n¿Qué tipo de propiedad buscas?\n- Apartamento\n- Casa\n- Local comercial\n\n¿Y cuál es tu presupuesto aproximado?`;
+    respuesta = `¡Excelente decisión! 🎉\n\n¿En qué ciudad buscas?\n¿Y cuál es tu presupuesto aproximado?`;
     tipoSolicitud = 'Compra';
   }
   // Opción 2: Venta
@@ -224,13 +230,13 @@ async function procesarMensaje(msg) {
   // Opción 3: Arriendo
   else if (texto === '3') {
     limpiarHistorial(telefono);
-    respuesta = `¡Claro! 🏢\n\n¿Buscas arrendar o tienes una propiedad para arrendar?\n\nCuéntame más detalles: zona, presupuesto, tipo de propiedad.`;
+    respuesta = `¡Claro! 🏢\n\n¿En qué ciudad buscas?\n¿Cuál es tu presupuesto mensual?`;
     tipoSolicitud = 'Arriendo';
   }
   // Opción 4: Catálogo
   else if (texto === '4') {
     limpiarHistorial(telefono);
-    respuesta = `📱 Te envío nuestro catálogo digital.\n\n¿Tienes alguna preferencia?\n- Zona específica\n- Rango de precio\n- Número de habitaciones\n\nCuéntame para mostrarte las mejores opciones.`;
+    respuesta = `📱 Te muestro el catálogo.\n\n¿Buscas para comprar o arrendar?\n¿En qué ciudad?`;
     tipoSolicitud = 'Catálogo';
   }
   // Conversación normal con IA (CON MEMORIA)
@@ -248,6 +254,100 @@ async function procesarMensaje(msg) {
     // Detectar tipo de solicitud
     tipoSolicitud = detectarTipoSolicitud(texto);
   }
+
+  // ========================================
+  // BÚSQUEDA DE PROPIEDADES
+  // ========================================
+  
+  const parametrosBusqueda = extraerParametrosBusqueda(respuesta);
+  
+  if (parametrosBusqueda) {
+    console.log('🔍 Búsqueda de propiedades solicitada');
+    
+    const tipo = parametrosBusqueda.tipo || 'arriendo';
+    const ciudad = parametrosBusqueda.ciudad || '';
+    const precio = parametrosBusqueda.precio ? parseFloat(parametrosBusqueda.precio) : null;
+    
+    // Consultar propiedades según tipo
+    let resultado;
+    if (tipo === 'venta' || tipo === 'compra') {
+      resultado = await obtenerPropiedadesVenta(ciudad, precio);
+    } else {
+      resultado = await obtenerPropiedadesArriendo(ciudad, precio);
+    }
+    
+    // Formatear propiedades para WhatsApp
+    if (resultado.success && resultado.propiedades.length > 0) {
+      const propiedadesFormateadas = formatearPropiedades(resultado.propiedades, 5);
+      
+      // Limpiar marcador y agregar propiedades
+      respuesta = respuesta.replace(/\[BUSCAR_PROPIEDADES:[^\]]+\]/, '').trim();
+      respuesta += `\n\n${propiedadesFormateadas}`;
+      
+      // Enviar fotos si existen
+      for (let i = 0; i < Math.min(3, resultado.propiedades.length); i++) {
+        const prop = resultado.propiedades[i];
+        if (prop.foto && prop.foto.startsWith('http')) {
+          try {
+            await sock.sendMessage(jid, {
+              image: { url: prop.foto },
+              caption: `📍 ${prop.direccion}, ${prop.ciudad}\n💰 $${prop.precio.toLocaleString('es-CO')}`
+            });
+          } catch (error) {
+            console.log('⚠️ Error enviando foto:', error.message);
+          }
+        }
+      }
+    } else {
+      respuesta = respuesta.replace(/\[BUSCAR_PROPIEDADES:[^\]]+\]/, '').trim();
+      respuesta += '\n\nNo encontré propiedades con esos criterios. ¿Quieres buscar en otra ciudad o con otro presupuesto?';
+    }
+  }
+
+  // ========================================
+  // SISTEMA DE CONFIRMACIÓN DE CITAS
+  // ========================================
+  
+  // 1. Detectar si está pidiendo confirmación
+  const solicitandoConfirmacion = respuesta.includes('[CONFIRMAR_CITA]');
+  
+  // 2. Detectar si la cita fue confirmada por el usuario
+  const citaConfirmada = respuesta.includes('[CITA_AGENDADA]');
+  
+  // Limpiar marcadores de la respuesta
+  let respuestaLimpia = respuesta
+    .replace('[CONFIRMAR_CITA]', '')
+    .replace('[CITA_AGENDADA]', '')
+    .trim();
+  
+  // Variables para guardar
+  let detallesCita = '';
+  let guardarEnSheet = false;
+  
+  // Si está solicitando confirmación, NO guardar aún
+  if (solicitandoConfirmacion) {
+    console.log('⏳ Esperando confirmación del usuario...');
+    tipoSolicitud = 'Confirmando cita';
+    guardarEnSheet = false;
+  }
+  
+  // Si la cita fue confirmada, guardar
+  if (citaConfirmada) {
+    tipoSolicitud = '🗓️ Cita Agendada';
+    detallesCita = respuestaLimpia;
+    guardarEnSheet = true;
+    console.log('✅ Cita confirmada por el usuario');
+  }
+
+  // Guardar en Google Sheets SOLO si hay confirmación
+  if (guardarEnSheet) {
+    await guardarEnGoogleSheet(nombre, telefono, tipoSolicitud, detallesCita);
+  }
+
+  // Enviar respuesta limpia
+  console.log('📤 Enviando respuesta...');
+  await sock.sendMessage(jid, { text: respuestaLimpia });
+}
 
   // ========================================
   // SISTEMA DE CONFIRMACIÓN DE CITAS
