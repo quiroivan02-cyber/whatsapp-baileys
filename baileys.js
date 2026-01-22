@@ -6,10 +6,8 @@ import * as baileysNS from "@whiskeysockets/baileys";
 import fs from "fs/promises";
 import { config } from './config.js';
 import { guardarEnGoogleSheet } from './sheets.js';
-import { consultarGroq, detectarTipoSolicitud } from './groq.js';
-import { obtenerPropiedadesArriendo, obtenerPropiedadesVenta, formatearPropiedades } from './propiedades.js';
 import { consultarGroq, detectarTipoSolicitud, extraerParametrosBusqueda } from './groq.js';
-
+import { obtenerPropiedadesArriendo, obtenerPropiedadesVenta, formatearPropiedades } from './propiedades.js';
 
 // ========================================
 // MEMORIA DE CONVERSACIONES
@@ -179,9 +177,6 @@ function detenerMonitor() {
 /**
  * Procesa los mensajes recibidos
  */
-/**
- * Procesa los mensajes recibidos
- */
 async function procesarMensaje(msg) {
   if (!msg.message || msg.key.fromMe) return;
 
@@ -336,51 +331,6 @@ async function procesarMensaje(msg) {
     tipoSolicitud = '🗓️ Cita Agendada';
     detallesCita = respuestaLimpia;
     guardarEnSheet = true;
-    console.log('✅ Cita confirmada por el usuario');
-  }
-
-  // Guardar en Google Sheets SOLO si hay confirmación
-  if (guardarEnSheet) {
-    await guardarEnGoogleSheet(nombre, telefono, tipoSolicitud, detallesCita);
-  }
-
-  // Enviar respuesta limpia
-  console.log('📤 Enviando respuesta...');
-  await sock.sendMessage(jid, { text: respuestaLimpia });
-}
-
-  // ========================================
-  // SISTEMA DE CONFIRMACIÓN DE CITAS
-  // ========================================
-  
-  // 1. Detectar si está pidiendo confirmación
-  const solicitandoConfirmacion = respuesta.includes('[CONFIRMAR_CITA]');
-  
-  // 2. Detectar si la cita fue confirmada por el usuario
-  const citaConfirmada = respuesta.includes('[CITA_AGENDADA]');
-  
-  // Limpiar marcadores de la respuesta
-  let respuestaLimpia = respuesta
-    .replace('[CONFIRMAR_CITA]', '')
-    .replace('[CITA_AGENDADA]', '')
-    .trim();
-  
-  // Variables para guardar
-  let detallesCita = '';
-  let guardarEnSheet = false;
-  
-  // Si está solicitando confirmación, NO guardar aún
-  if (solicitandoConfirmacion) {
-    console.log('⏳ Esperando confirmación del usuario...');
-    tipoSolicitud = 'Confirmando cita';
-    guardarEnSheet = false; // No guardar aún
-  }
-  
-  // Si la cita fue confirmada, guardar
-  if (citaConfirmada) {
-    tipoSolicitud = '🗓️ Cita Agendada';
-    detallesCita = respuestaLimpia;
-    guardarEnSheet = true; // Sí guardar
     console.log('✅ Cita confirmada por el usuario');
   }
 
