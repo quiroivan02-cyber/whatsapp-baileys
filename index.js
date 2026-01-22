@@ -519,16 +519,15 @@ app.get('/health', (req, res) => {
 /**
  * Ping interno cada 5 minutos para mantener activo
  */
-setInterval(async () => {
+setInterval(() => {
   console.log('🏓 Ping interno - Manteniendo servicio activo');
   
-  // Si no está conectado, intentar reconectar
-  if (!isConnected && sock) {
-    console.log('⚠️ Detectada desconexión, intentando reconectar...');
-    const { restartBaileys } = await import('./baileys.js');
-    await restartBaileys({ delayMs: 5000 });
+  // Si no está conectado, solo logear (el monitor interno se encarga de reconectar)
+  if (!isConnected) {
+    console.log('⚠️ Bot desconectado - El monitor interno intentará reconectar');
   }
 }, 300000); // Cada 5 minutos
+
 
 console.log('🏥 Health check disponible en /health');
 
