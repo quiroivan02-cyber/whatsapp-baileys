@@ -1,13 +1,20 @@
 {
-  "name": "n8n-whatsapp-baileys",
+  "name": "whatsapp-bot-inmobiliaria",
   "version": "1.0.0",
+  "description": "Bot de WhatsApp para Inmobiliaria Prime con IA",
+  "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
+  "keywords": ["whatsapp", "bot", "baileys", "groq", "ai"],
+  "author": "Tu Nombre",
+  "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "github:WhiskeySockets/Baileys",
-    "express": "^4.18.3",
+    "@whiskeysockets/baileys": "^6.7.9",
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
     "qrcode": "^1.5.4"
   }
 }
