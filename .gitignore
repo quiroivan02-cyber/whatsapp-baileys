@@ -1,2 +1,5 @@
 .env
 node_modules/
+
+# Sesión local de WhatsApp (Baileys)
+auth_info_baileys/
