@@ -17,9 +17,12 @@ export const config = {
 
   // AI Configuration (OpenRouter)
   aiConfig: {
-    // Aquí cambiamos a las llaves que definiste en tu .env
-    apiKey: process.env.OPENROUTER_API_KEY || "", 
-    model: process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct",
+    apiKey: process.env.OPENROUTER_API_KEY || "",
+    // Sufijo :free = sin cargo en OpenRouter (requiere API key válida). Para modelos de pago, quita :free y añade créditos.
+    model:
+      process.env.OPENROUTER_MODEL ||
+      "meta-llama/llama-3.3-70b-instruct:free",
+    httpReferer: process.env.OPENROUTER_HTTP_REFERER || "http://localhost:3000",
   },
 
   // Baileys Session Configuration

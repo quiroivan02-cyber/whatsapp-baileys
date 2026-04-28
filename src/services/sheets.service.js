@@ -48,10 +48,10 @@ export async function saveToSheet(data) {
 }
 
 /**
- * Fetches properties or records from Google Sheets
- * @param {string} action - Action to perform (getArriendo, getVenta, etc)
- * @param {Object} params - Additional query parameters (city, maxPrice)
- * @returns {Promise<Object>} Data from sheet
+ * Consulta inventario u otros datos expuestos por tu Apps Script.
+ * Acciones típicas: getInventario (stock general), getVenta, getArriendo.
+ * Params se envían como query string (city, price, category, q, sku, etc.) según tu script.
+ * Respuesta: JSON con array en propiedades, items, inventario o productos.
  */
 export async function fetchFromSheet(action = 'getArriendo', params = {}) {
   if (!config.sheetsConfig.apiUrl) {

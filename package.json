@@ -2,11 +2,11 @@
   "name": "whatsapp-bot-inmobiliaria",
   "version": "1.0.0",
   "description": "Bot de WhatsApp para Inmobiliaria Prime con IA",
-  "main": "index.js",
+  "main": "src/server.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
   },
   "keywords": [
     "whatsapp",

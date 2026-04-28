@@ -60,6 +60,7 @@ export function homePage(req, res) {
  * Vista del Código QR
  */
 export async function qrPage(req, res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
   if (isConnected) {
     return res.send(`
       <script>setTimeout(() => { window.location.href = "/"; }, 2000);</script>
@@ -83,7 +84,11 @@ export async function qrPage(req, res) {
   }
 
   try {
-    const qrImage = await QRCode.toDataURL(lastQr);
+    const qrImage = await QRCode.toDataURL(lastQr, {
+      errorCorrectionLevel: "L",
+      margin: 2,
+      width: 320,
+    });
     return res.send(`
       <!DOCTYPE html>
       <html lang="es">
