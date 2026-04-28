@@ -47,7 +47,7 @@ export function homePage(req, res) {
         
         <hr>
         
-        <form action="/reset" method="POST" onsubmit="return confirm('⚠️ ¿Estás seguro? Se borrará la sesión de la base de datos y tendrás que escanear el QR nuevamente.');">
+        <form action="/reset" method="POST" onsubmit="return confirm('⚠️ ¿Seguro? Se borrarán los archivos de sesión de WhatsApp en el servidor (carpeta Baileys) y deberás escanear el QR de nuevo.');">
           <button type="submit" class="btn btn-danger">Cerrar Sesión (Reset)</button>
         </form>
       </div>

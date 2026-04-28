@@ -1,0 +1,18 @@
+# Render.com — Web Service (Node)
+# Plan gratuito: el servicio se duerme tras ~15 min sin tráfico HTTP; un bot WhatsApp 24/7
+# necesita plan de pago (Always on) o un host tipo VPS. Ver comentarios en src/server.js
+services:
+  - type: web
+    name: n8n-whatsapp-baileys
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      # Opcional: sesión en disco persistente (añade Disk en el dashboard y usa la ruta de montaje)
+      # - key: BAILEYS_AUTH_DIR
+      #   value: /data/baileys-auth

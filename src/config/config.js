@@ -25,7 +25,9 @@ export const config = {
     httpReferer: process.env.OPENROUTER_HTTP_REFERER || "http://localhost:3000",
   },
 
-  // Baileys Session Configuration
+  // Baileys: carpeta de sesión (en Render monta un disco persistente y apunta aquí, ej. /data/baileys-auth)
+  baileysAuthDir: process.env.BAILEYS_AUTH_DIR || "auth_info_baileys",
+
   sessionsDir: process.env.SESSIONS_DIR || "./sessions",
 
   // Real Estate Bot Business Logic
