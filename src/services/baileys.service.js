@@ -8,19 +8,28 @@ import { rm } from "fs/promises";
 import path from "path";
 import pino from "pino";
 import { config } from "../config/config.js";
-import { getChatCompletion, extractSearchParameters } from "./ai.service.js";
 import {
     appendTurn,
     getHistoryForJid,
     getLastSheetQueryKey,
     setLastSheetQueryKey,
+    getStateForJid,
+    setStateForJid,
+    setTempBufferForJid,
+    getTempBufferForJid,
+    clearTempBufferForJid,
 } from "./conversation.service.js";
 import {
     buildSheetQueryKey,
     fetchFromSheet,
     getRowsFromSheetResponse,
     saveToSheet,
+    addStock,
+    recordSale,
 } from "./sheets.service.js";
+import { getChatCompletion, extractSearchParameters, extractActionParameters } from "./ai.service.js";
+import { generateInventoryPdf } from "./pdf.service.js";
+import fs from "fs";
 
 /** Evita reintentos automáticos mientras cerramos la sesión a propósito (reset). */
 let suppressReconnect = false;
@@ -30,12 +39,14 @@ function resolveAuthFolder() {
     return path.isAbsolute(dir) ? dir : path.join(process.cwd(), dir);
 }
 
-function sheetActionForParams(params) {
-    const t = (params.type || "").toLowerCase();
-    if (t === "rent") return "getArriendo";
-    if (t === "sale") return "getVenta";
-    return "getInventario";
-}
+const MAIN_MENU = `Hola, buen día. Soy tu agente de Indias motos. 🏍️
+¿Qué deseas consultar hoy?
+
+1. Ver estado de inventario 📦
+2. Ingresar inventario ➕
+3. Inventario vendido 🧾
+
+Responde con el número de la opción que desees o escribe "menu" en cualquier momento.`;
 
 function formatCOP(value) {
     const n = Number(String(value).replace(/[^\d.-]/g, ""));
@@ -52,24 +63,19 @@ function formatInventoryCaption(row) {
         row.nombre ??
         row.name ??
         row.producto ??
-        row.address ??
-        row.direccion ??
-        row.titulo ??
+        row.articulo ??
+        row.item ??
         "Ítem";
     const sku = row.sku ?? row.codigo ?? row.ref ?? row.referencia;
     const rawPrice = row.precio ?? row.price ?? row.valor;
-    const city = row.ciudad ?? row.city ?? row.ubicacion ?? row.bodega;
     const stock = row.stock ?? row.cantidad ?? row.disponible;
-    const op = String(row.listingType || row.type || "").toLowerCase();
-    let badge = "";
-    if (op === "rent") badge = "🔑 Arriendo · ";
-    else if (op === "sale") badge = "🏷️ Venta · ";
-    const lines = [`${badge}📦 ${title}`];
+    
+    const lines = [`📦 *${title}*`];
     if (sku) lines.push(`Ref: ${sku}`);
     if (rawPrice != null && rawPrice !== "")
         lines.push(`💰 ${formatCOP(rawPrice)}`);
-    if (city) lines.push(`📍 ${city}`);
-    if (stock != null && stock !== "") lines.push(`Disponible: ${stock}`);
+    if (stock != null && stock !== "") lines.push(`Stock: ${stock}`);
+    
     return {
         caption: lines.join("\n"),
         photo: row.foto ?? row.photo ?? row.imagen ?? row.url_foto ?? row.image,
@@ -102,8 +108,6 @@ export async function startBaileys() {
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
         const { version } = await fetchLatestBaileysVersion();
 
-        // browser debe ser [OS, navegador, versión] — ver Browsers en Baileys 7.
-        // Usar el nombre de la empresa como "OS" rompe el registro y el QR nunca llega.
         sock = makeWASocket({
             version,
             auth: state,
@@ -116,96 +120,197 @@ export async function startBaileys() {
 
         sock.ev.on("creds.update", saveCreds);
 
-        // --- MANEJO DE MENSAJES CON IA Y SHEETS ---
-        sock.ev.on("messages.upsert", async (m) => {
-            const msg = m.messages?.[0];
-            if (!msg?.message || msg.key.fromMe) return;
+const TIMEOUT_DURATION = 5 * 60 * 1000; // 5 minutos
+const userTimers = new Map();
 
-            const jid = msg.key.remoteJid;
-            const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-            if (!text || !jid) return;
+function resetUserSession(jid) {
+    setStateForJid(jid, "IDLE");
+    clearTempBufferForJid(jid);
+    if (userTimers.has(jid)) {
+        clearTimeout(userTimers.get(jid));
+        userTimers.delete(jid);
+    }
+}
 
-            console.log(`📩 Mensaje recibido: "${text}"`);
+function startUserTimer(jid) {
+    if (userTimers.has(jid)) {
+        clearTimeout(userTimers.get(jid));
+    }
+    const timer = setTimeout(() => {
+        console.log(`🕒 Sesión expirada para ${jid}`);
+        resetUserSession(jid);
+    }, TIMEOUT_DURATION);
+    userTimers.set(jid, timer);
+}
 
-            try {
-                // Efecto "Escribiendo..."
-                await sock.sendPresenceUpdate("composing", jid);
+// --- MANEJO DE MENSAJES ---
+sock.ev.on("messages.upsert", async (m) => {
+    const msg = m.messages?.[0];
+    if (!msg?.message || msg.key.fromMe) return;
 
-                // 1. IA con historial de este chat (mismo JID)
-                const history = getHistoryForJid(jid);
-                const aiResponse = await getChatCompletion(text, msg.pushName || "Cliente", history);
-                
-                // 2. Procesar búsqueda en Sheets si la IA lo detecta
-                const searchParams = extractSearchParameters(aiResponse);
-                if (searchParams) {
-                    const action = sheetActionForParams(searchParams);
-                    const query = { ...searchParams };
-                    delete query.type;
-                    const sheetKey = buildSheetQueryKey(action, query);
-                    const prevKey = getLastSheetQueryKey(jid);
+    const jid = msg.key.remoteJid;
+    const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+    if (!text || !jid) return;
 
-                    if (sheetKey === prevKey) {
-                        console.log(
-                            "⏭️ Misma consulta Sheets que la anterior; no repito fichas."
-                        );
+    console.log(`📩 Mensaje recibido: "${text}"`);
+
+    try {
+        const state = getStateForJid(jid);
+        startUserTimer(jid);
+
+        // 1. Comando 'menu' o 'menú' - Siempre disponible
+        if (text.toLowerCase() === "menu" || text.toLowerCase() === "menú") {
+            await sock.sendMessage(jid, { text: MAIN_MENU });
+            setStateForJid(jid, "MAIN_MENU");
+            return;
+        }
+
+        // 2. Estado inicial o expirado: Solo saludo básico
+        if (state === "IDLE") {
+            await sock.sendMessage(jid, { text: "Hola, soy tu asistente de Indias motos. 🏍️\n\nSi quieres ver el menú de opciones, escribe *menu*." });
+            return;
+        }
+
+        // 3. Manejo de Selección de Menú (Paso de IDLE/IDLE_MENU a Acción)
+        if (state === "MAIN_MENU") {
+            if (text === "1") {
+                await sock.sendMessage(jid, { text: "Entendido. ¿Qué producto o categoría deseas buscar? (o escribe 'todos' para el PDF)" });
+                setStateForJid(jid, "AWAITING_SEARCH");
+                return;
+            } else if (text === "2") {
+                await sock.sendMessage(jid, { text: "Por favor, dime qué producto vas a ingresar, la cantidad y el precio (ej: 5 Cascos a 80.000)" });
+                setStateForJid(jid, "AWAITING_ADD_STOCK");
+                return;
+            } else if (text === "3") {
+                await sock.sendMessage(jid, { text: "Por favor, dime qué producto se vendió y cuántas unidades (ej: Vendí 2 llantas)" });
+                setStateForJid(jid, "AWAITING_SALE");
+                return;
+            } else {
+                await sock.sendMessage(jid, { text: "Opción no válida. Por favor selecciona 1, 2 o 3, o escribe *menu* para ver las opciones." });
+                return;
+            }
+        }
+
+        // 4. Lógica de Confirmación de Venta (Alta prioridad)
+        if (state === "CONFIRMING_SALE") {
+            if (text.toLowerCase().includes("si") || text.toLowerCase().includes("confirmar") || text === "1") {
+                const pendingSale = getTempBufferForJid(jid);
+                if (pendingSale) {
+                    await sock.sendPresenceUpdate("composing", jid);
+                    const res = await recordSale(pendingSale.item, pendingSale.qty);
+                    if (res.success) {
+                        await sock.sendMessage(jid, { text: `✅ Venta registrada con éxito. El stock se ha actualizado.` });
                     } else {
-                        console.log("🔍 IA solicitó consulta a Sheets:", searchParams);
-                        const result = await fetchFromSheet(action, query);
-                        const rows = getRowsFromSheetResponse(result);
+                        await sock.sendMessage(jid, { text: `❌ Error: ${res.error}` });
+                    }
+                    clearTempBufferForJid(jid);
+                    setStateForJid(jid, "AI_MODE"); // Mantener en modo IA tras acción
+                    return;
+                }
+            } else if (text.toLowerCase().includes("no") || text === "2") {
+                await sock.sendMessage(jid, { text: "Venta cancelada." });
+                clearTempBufferForJid(jid);
+                setStateForJid(jid, "AI_MODE");
+                return;
+            }
+        }
 
-                        if (result.success) {
-                            setLastSheetQueryKey(jid, sheetKey);
-                        }
+        // 5. PDF Directo (Sin IA si está buscando)
+        if (state === "AWAITING_SEARCH") {
+            const isTodo = text.toLowerCase() === "todos" || text.toLowerCase() === "todo";
+            if (isTodo) {
+                await sock.sendMessage(jid, { text: "Generando reporte PDF completo... 📄" });
+                const result = await fetchFromSheet("getInventario", { q: "todos" });
+                const rows = getRowsFromSheetResponse(result);
+                if (result.success && rows.length > 0) {
+                    const pdfPath = await generateInventoryPdf(rows);
+                    await sock.sendMessage(jid, {
+                        document: fs.readFileSync(pdfPath),
+                        fileName: "Inventario_Indias_Motos.pdf",
+                        mimetype: "application/pdf"
+                    });
+                    fs.unlinkSync(pdfPath);
+                    return;
+                }
+            }
+        }
 
-                        if (result.success && rows.length > 0) {
-                            for (const row of rows.slice(0, 5)) {
-                                const { caption, photo } = formatInventoryCaption(row);
-                                const url = photo && String(photo).trim();
-                                if (url && /^https?:\/\//i.test(url)) {
-                                    await sock.sendMessage(jid, {
-                                        image: { url },
-                                        caption,
-                                    });
-                                } else {
-                                    await sock.sendMessage(jid, { text: caption });
-                                }
-                            }
-                        }
+        // 6. MODO IA (Se activa tras elegir opción del menú)
+        // Si el estado no es IDLE ni MAIN_MENU, asumimos que estamos procesando con IA
+        await sock.sendPresenceUpdate("composing", jid);
+        const history = getHistoryForJid(jid);
+        const aiResponse = await getChatCompletion(text, msg.pushName || "Cliente", history);
+
+        // Procesar marcadores de la IA (Búsqueda, Venta, Stock)
+        const searchParams = extractSearchParameters(aiResponse);
+        if (searchParams) {
+            const result = await fetchFromSheet("getInventario", searchParams);
+            const rows = getRowsFromSheetResponse(result);
+            if (result.success && rows.length > 0) {
+                for (const row of rows.slice(0, 5)) {
+                    const { caption, photo } = formatInventoryCaption(row);
+                    if (photo && /^https?:\/\//i.test(photo)) {
+                        await sock.sendMessage(jid, { image: { url: photo }, caption });
+                    } else {
+                        await sock.sendMessage(jid, { text: caption });
                     }
                 }
-
-                // 3. Agendar cita en Sheets
-                if (aiResponse.includes("[APPOINTMENT_SCHEDULED]")) {
-                    await saveToSheet({
-                        name: msg.pushName || "Cliente",
-                        phone: jid.split("@")[0],
-                        requestType: "🗓️ Cita",
-                        details: text
-                    });
-                    console.log("📋 Cita guardada en Google Sheets");
-                }
-
-                // 4. Enviar respuesta de texto limpia
-                const cleanMessage = aiResponse.replace(/\[.*?\]/g, "").trim();
-                if (cleanMessage) {
-                    await sock.sendMessage(jid, { text: cleanMessage });
-                }
-
-                appendTurn(
-                    jid,
-                    text,
-                    cleanMessage ||
-                        (searchParams
-                            ? "Te envío opciones del inventario en los mensajes de arriba."
-                            : aiResponse.replace(/\[[^\]]*\]/g, "").trim() || "…")
-                );
-
-                await sock.sendPresenceUpdate("paused", jid);
-
-            } catch (err) {
-                console.error("❌ Error en el flujo de mensaje:", err);
+            } else {
+                await sock.sendMessage(jid, { text: "No encontré ese producto en el inventario." });
             }
-        });
+        }
+
+        const saleParams = extractActionParameters(aiResponse, "RECORD_SALE");
+        if (saleParams) {
+            // 1. Ir al inventario a buscar el producto real antes de confirmar
+            await sock.sendMessage(jid, { text: "Buscando producto en el inventario... 🔍" });
+            const searchResult = await fetchFromSheet("getInventario", { q: saleParams.item });
+            const foundRows = getRowsFromSheetResponse(searchResult);
+
+            if (searchResult.success && foundRows.length > 0) {
+                // Tomar el primer resultado encontrado
+                const product = foundRows[0];
+                const realName = product.nombre;
+                const realPrice = product.precio;
+
+                // 2. Guardar datos REALES de la hoja en el buffer
+                setTempBufferForJid(jid, { 
+                    item: realName, 
+                    qty: saleParams.qty,
+                    price: realPrice 
+                });
+                
+                setStateForJid(jid, "CONFIRMING_SALE");
+                
+                // 3. Confirmar con datos exactos
+                const confirmMsg = `¿Confirmar venta ${saleParams.qty} unidades de "${realName}" con precio de venta ${formatCOP(realPrice)}?\n\nResponde con *Si* para agregar a la base de datos o *No* para cancelar.`;
+                await sock.sendMessage(jid, { text: confirmMsg });
+            } else {
+                // Si no se encuentra, pedir más claridad
+                await sock.sendMessage(jid, { text: `❌ No encontré el producto "${saleParams.item}" en el inventario.\n\nPor favor, dime el nombre más exacto o una palabra clave clara (ej: "aceite", "filtro", "llanta").` });
+                setStateForJid(jid, "AWAITING_SALE"); // Reintentar en el mismo estado
+            }
+            return;
+        }
+
+        const addParams = extractActionParameters(aiResponse, "ADD_STOCK");
+        if (addParams) {
+            const res = await addStock(addParams.item, addParams.qty, addParams.price);
+            if (res.success) await sock.sendMessage(jid, { text: `✅ Stock actualizado: ${addParams.qty} de "${addParams.item}".` });
+        }
+
+        const cleanMessage = aiResponse.replace(/\[.*?\]/g, "").trim();
+        if (cleanMessage) {
+            await sock.sendMessage(jid, { text: cleanMessage });
+        }
+
+        appendTurn(jid, text, cleanMessage || "Procesado.");
+        await sock.sendPresenceUpdate("paused", jid);
+
+    } catch (err) {
+        console.error("❌ Error en flujo:", err);
+    }
+});
 
         // --- MANEJO DE CONEXIÓN ---
         sock.ev.on("connection.update", (update) => {

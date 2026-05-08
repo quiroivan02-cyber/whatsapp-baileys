@@ -6,6 +6,10 @@
 const store = new Map();
 /** Última consulta a Sheets por JID (evita reenviar las mismas fichas). */
 const lastSheetQueryKey = new Map();
+/** Estado de la conversación por JID (ej: 'MAIN_MENU', 'AWAITING_SALE') */
+const states = new Map();
+/** Datos temporales para confirmaciones (ej: venta pendiente) */
+const tempBuffer = new Map();
 
 /** Máximo de mensajes guardados (user + assistant alternados). */
 const MAX_MESSAGES = 24;
@@ -13,6 +17,26 @@ const MAX_MESSAGES = 24;
 export function getHistoryForJid(jid) {
     if (!jid) return [];
     return store.get(jid) ? [...store.get(jid)] : [];
+}
+
+export function getStateForJid(jid) {
+    return states.get(jid) || "IDLE";
+}
+
+export function setStateForJid(jid, state) {
+    if (jid) states.set(jid, state);
+}
+
+export function setTempBufferForJid(jid, data) {
+    if (jid) tempBuffer.set(jid, data);
+}
+
+export function getTempBufferForJid(jid) {
+    return tempBuffer.get(jid) || null;
+}
+
+export function clearTempBufferForJid(jid) {
+    tempBuffer.delete(jid);
 }
 
 /**

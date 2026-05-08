@@ -158,11 +158,9 @@ export function getRowsFromSheetResponse(data) {
 }
 
 /**
- * Saves contact or appointment data to Google Sheets
+ * Saves contact, appointment, or inventory data to Google Sheets
  */
-export async function saveToSheet(data) {
-  const { name, phone, requestType, details = "" } = data;
-
+export async function saveToSheet(data, action = "saveCita") {
   if (!config.sheetsConfig.apiUrl) {
     console.error("⚠️ SHEETS_API_URL not configured");
     return { success: false, error: "API not configured" };
@@ -170,16 +168,11 @@ export async function saveToSheet(data) {
 
   try {
     const payload = {
-      nombre: name || "Unknown",
-      telefono: phone || "No number",
-      tipo_solicitud: requestType || "General Inquiry",
-      detalles: details,
+        action,
+        ...data
     };
-    console.log("📊 Sheets POST guardar fila:", {
-      nombre: payload.nombre,
-      telefono: payload.telefono,
-      tipo_solicitud: payload.tipo_solicitud,
-    });
+    
+    console.log(`📊 Sheets POST ${action}:`, data);
 
     const response = await fetch(config.sheetsConfig.apiUrl, {
       method: "POST",
@@ -189,22 +182,30 @@ export async function saveToSheet(data) {
 
     const result = await parseResponseAsJson(response);
     if (result.success) {
-      console.log("✅ Sheets: guardado OK");
+      console.log(`✅ Sheets ${action}: OK`);
     } else {
-      console.log("❌ Sheets guardado:", result.error || result);
+      console.log(`❌ Sheets ${action}:`, result.error || result);
     }
     return result;
   } catch (error) {
-    console.error("❌ Sheets Service Error (POST):", error.message);
+    console.error(`❌ Sheets Service Error (POST ${action}):`, error.message);
     return { success: false, error: error.message };
   }
+}
+
+export async function addStock(item, qty, price) {
+    return saveToSheet({ item, qty, price }, "addStock");
+}
+
+export async function recordSale(item, qty) {
+    return saveToSheet({ item, qty }, "sellInventory");
 }
 
 /**
  * GET ?action=getVenta|getArriendo|getInventario|getCitas&city=&ciudad=&price=&precioMax=...
  * Respuesta esperada: JSON { success: true, propiedades: [ {...}, ... ] } (u otras claves ver getRowsFromSheetResponse).
  */
-export async function fetchFromSheet(action = "getArriendo", params = {}) {
+export async function fetchFromSheet(action = "getInventario", params = {}) {
   if (!config.sheetsConfig.apiUrl) {
     return { success: false, error: "API not configured" };
   }

@@ -4,57 +4,19 @@ import { config } from '../config/config.js';
 /**
  * Asistente: inventario en Google Sheets + envío por WhatsApp (datos reales vía API).
  */
-const SYSTEM_PROMPT = `Eres el asistente de ventas de "${config.botConfig.company}". Te llamas ${config.botConfig.salesRep}.
+const SYSTEM_PROMPT = `Eres el asistente de "Indias motos". Gestionas inventario de motocicletas y repuestos.
 
-CONTEXTO DEL NEGOCIO:
-- El inventario (productos, servicios o ítems disponibles) vive en Google Sheets.
-- Tú NO tienes la lista en la cabeza: solo puedes ofrecer lo que el sistema consulte en la hoja.
-- Cuando el cliente pida ver stock, precios, disponibilidad o una categoría, debes pedir esa consulta al sistema con el marcador obligatorio (una sola vez por respuesta cuando corresponda).
-- Lo que el cliente recibirá por WhatsApp (texto, fotos o fichas) sale de esa hoja: nunca inventes precios, cantidades, referencias ni fotos.
+REGLAS DE ORO (Ahorro de tokens):
+1. Si el usuario elige una opción del menú, NO uses la IA para responder "entendido", hazlo tú directamente en el código si puedes, pero si llegas aquí, ve al grano.
+2. Para VENTAS: Extrae el NOMBRE exacto del producto. Si el usuario dice "20W50", busca "Aceite" o el nombre completo que aparezca en el historial.
+3. Si el usuario confirma con "si", "no", "confirmar", NO generes marcadores, solo responde cordialmente.
 
-MEMORIA DEL CHAT:
-- Recibes el historial de esta misma conversación en WhatsApp. Úsalo siempre.
-- Si el cliente ya dijo ciudad, presupuesto, si compra o arrienda, o tipo de propiedad (casa, apartamento…), NO lo vuelvas a preguntar: confírmalo en una frase y sigue.
-- No reinicies el saludo tipo "Hola, soy Sofía…" en cada mensaje; solo en el primer contacto del hilo o si el cliente saluda de nuevo tras mucho tiempo.
-- Si ya tienes datos suficientes para buscar en la hoja, responde con SHEET_SEARCH de inmediato sin pedir de nuevo lo mismo.
+MARCADORES:
+- [SHEET_SEARCH:q=palabra_clave] (Usa palabras clave, ej: "aceite" en lugar de "20W50")
+- [RECORD_SALE:item=Nombre Completo|qty=1] (Usa el nombre lo más completo posible para que coincida en la hoja)
+- [ADD_STOCK:item=Nombre|qty=1|price=0]
 
-CÓMO HABLAR:
-- Español colombiano, cordial y claro.
-- Pregunta solo lo que aún no conste en el historial y sea necesario para filtrar.
-- Frases cortas (2–4 líneas) antes del marcador.
-- Sin asteriscos para negritas en tu texto.
-- Presupuesto en el marcador price: SIEMPRE pesos COP completos sin puntos ni comas. Ejemplos: 10 millones → price=10000000; 100 millones → price=100000000. Nunca uses solo "10" ni "100" sin los ceros: el sistema los interpreta como millones, pero es propenso a error.
-
-INVENTARIO (DOS HOJAS DISTINTAS — MUY IMPORTANTE):
-- Hay hoja de VENTA (precios de compra, suelen ser cientos de millones) y hoja de ARRIENDO (canon mensual, suele ser millones bajos).
-- Si el cliente quiere COMPRAR / es para vivir de dueño / "precio de venta" → type DEBE ser **sale** (solo hoja venta).
-- Si quiere ARRENDAR / alquilar / mensualidad → type DEBE ser **rent** (solo hoja arriendo).
-- **type=inventory** (mezcla ambas) ÚNICAMENTE si el cliente pidió explícitamente ver venta y arriendo juntos, o aún no ha dicho cuál y ya mostraste opciones de ambos tras preguntar. Si no ha dicho compra vs arriendo, pregúntalo ANTES de consultar o usa el que ya dijo en el historial.
-
-CONSULTA AL INVENTARIO (cuando corresponda enviar el marcador):
-Incluye exactamente un bloque con este formato, en la misma línea o al final del mensaje:
-[SHEET_SEARCH:type=sale|city=Medellin|price=800000000|category=|q=|sku=]
-
-Parámetros (usa solo los que el cliente mencionó o que tengan sentido; deja vacío lo que no aplique sin borrar la clave):
-- type: **sale** = compra/venta | **rent** = arriendo | **inventory** = ambas hojas (caso excepcional).
-- city: ciudad o ubicación si el cliente la indicó.
-- price: presupuesto MÁXIMO en pesos COP (solo dígitos, ej. 10000000). Si el cliente no ha dicho presupuesto, omite price o déjalo vacío (no adivines).
-- category: categoría o tipo de producto si lo dijeron.
-- q: palabra clave o nombre del artículo.
-- sku: código o referencia si el cliente la dio.
-
-Ejemplo si piden apartamentos en arriendo en Medellín:
-Listo, reviso lo que hay disponible en la hoja. [SHEET_SEARCH:type=rent|city=Medellin|price=|category=|q=apartamento|sku=]
-
-PEDIDOS O CITAS (OPCIONAL):
-Si confirman fecha, hora y motivo para seguimiento o visita, cierra con:
-[APPOINTMENT_SCHEDULED]
-
-REGLAS:
-- Si no necesitas consultar la hoja (solo saludo, gracias o duda general), responde SIN [SHEET_SEARCH].
-- NO vuelvas a poner [SHEET_SEARCH] si en tu mensaje anterior ya consultaste con los MISMOS criterios (misma ciudad, mismo precio máx., mismo tipo y misma búsqueda q). Solo vuelve a consultar si el cliente cambia ciudad, presupuesto, tipo (compra/arriendo) o palabras de búsqueda.
-- Si necesitas datos del inventario y aún no tienes filtros, pide uno o dos datos y NO pongas SHEET_SEARCH hasta tener al menos un criterio útil (o usa type=inventory con q= con lo que dijeron).
-- Nunca prometas enviar fotos o precios concretos sin el marcador: el envío lo hace el sistema después de leer Sheets.`;
+CONSEJO: Sé breve. Español colombiano.`;
 
 /**
  * Request completion from OpenRouter
@@ -77,13 +39,9 @@ export async function getChatCompletion(userMessage, userName = 'Customer', hist
     const headers = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.aiConfig.apiKey}`,
-      'X-Title': config.botConfig.company,
     };
-    if (config.aiConfig.httpReferer) {
-      headers['HTTP-Referer'] = config.aiConfig.httpReferer;
-    }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -99,27 +57,25 @@ export async function getChatCompletion(userMessage, userName = 'Customer', hist
     try {
       data = JSON.parse(raw);
     } catch {
-      console.error('❌ OpenRouter respuesta no JSON:', response.status, raw.slice(0, 400));
+      console.error('❌ Groq respuesta no JSON:', response.status, raw.slice(0, 400));
       return 'Disculpa, mi cerebro digital se distrajo. ¿Me repites eso?';
     }
 
     const topError = data.error;
-    const choiceErr = data.choices?.[0]?.error;
     const choiceMsg = data.choices?.[0]?.message;
 
-    if (!response.ok || topError || choiceErr) {
+    if (!response.ok || topError) {
       const msg =
         (typeof topError === 'string' ? topError : topError?.message) ||
-        choiceErr?.message ||
         `HTTP ${response.status}`;
-      console.error('❌ OpenRouter:', response.status, msg, topError?.metadata || '');
+      console.error('❌ Groq:', response.status, msg);
       return 'Disculpa, mi cerebro digital se distrajo. ¿Me repites eso?';
     }
 
     const textOut = choiceMsg?.content?.trim();
     if (textOut) return textOut;
 
-    console.error('❌ OpenRouter sin contenido en choices:', JSON.stringify(data).slice(0, 500));
+    console.error('❌ Groq sin contenido en choices:', JSON.stringify(data).slice(0, 500));
     return 'No pude procesar tu solicitud.';
     
   } catch (error) {
@@ -129,10 +85,10 @@ export async function getChatCompletion(userMessage, userName = 'Customer', hist
 }
 
 /**
- * Extrae parámetros de [SHEET_SEARCH:...] o del marcador antiguo [SEARCH_PROPERTIES:...]
+ * Extrae parámetros de marcadores técnicos
  */
-export function extractSearchParameters(response) {
-  const regex = /\[(?:SHEET_SEARCH|SEARCH_PROPERTIES):([^\]]+)\]/;
+export function extractActionParameters(response, tag) {
+  const regex = new RegExp(`\\[${tag}:([^\\]]+)\\]`);
   const match = response.match(regex);
 
   if (!match) return null;
@@ -147,4 +103,8 @@ export function extractSearchParameters(response) {
   });
 
   return params;
+}
+
+export function extractSearchParameters(response) {
+    return extractActionParameters(response, "SHEET_SEARCH");
 }

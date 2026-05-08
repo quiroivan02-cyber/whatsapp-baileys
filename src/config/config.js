@@ -15,13 +15,14 @@ export const config = {
     apiUrl: process.env.SHEETS_API_URL || "",
   },
 
-  // AI Configuration (OpenRouter)
+  // AI Configuration (Groq)
   aiConfig: {
-    apiKey: process.env.OPENROUTER_API_KEY || "",
-    // Sufijo :free = sin cargo en OpenRouter (requiere API key válida). Para modelos de pago, quita :free y añade créditos.
+    apiKey: process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || "",
+    // Modelo predeterminado para Groq
     model:
-      process.env.OPENROUTER_MODEL ||
-      "meta-llama/llama-3.3-70b-instruct:free",
+      process.env.GROQ_MODEL ||
+      process.env.AI_MODEL ||
+      "llama-3.3-70b-versatile",
     httpReferer: process.env.OPENROUTER_HTTP_REFERER || "http://localhost:3000",
   },
 
@@ -58,8 +59,7 @@ export function validateConfig() {
   }
 
   if (!config.aiConfig.apiKey) {
-    // Validamos la nueva llave de OpenRouter
-    missingConfigs.push("OPENROUTER_API_KEY"); 
+    missingConfigs.push("GROQ_API_KEY"); 
   }
 
   if (missingConfigs.length > 0) {
