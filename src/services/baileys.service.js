@@ -2,17 +2,12 @@ import makeWASocket, {
     Browsers,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
-import { rm } from "fs/promises";
-import path from "path";
 import pino from "pino";
-import { config } from "../config/config.js";
+import { usePostgresAuthState, clearPostgresAuthState } from "./auth.service.js";
 import {
     appendTurn,
     getHistoryForJid,
-    getLastSheetQueryKey,
-    setLastSheetQueryKey,
     getStateForJid,
     setStateForJid,
     setTempBufferForJid,
@@ -20,7 +15,6 @@ import {
     clearTempBufferForJid,
 } from "./conversation.service.js";
 import {
-    buildSheetQueryKey,
     fetchFromSheet,
     getRowsFromSheetResponse,
     saveToSheet,
@@ -33,11 +27,6 @@ import fs from "fs";
 
 /** Evita reintentos automáticos mientras cerramos la sesión a propósito (reset). */
 let suppressReconnect = false;
-
-function resolveAuthFolder() {
-    const dir = config.baileysAuthDir || "auth_info_baileys";
-    return path.isAbsolute(dir) ? dir : path.join(process.cwd(), dir);
-}
 
 const MAIN_MENU = `Hola, buen día. Soy tu agente de Indias motos. 🏍️
 ¿Qué deseas consultar hoy?
@@ -100,12 +89,11 @@ export async function startBaileys() {
         suppressReconnect = false;
     }
 
-    const authFolder = resolveAuthFolder();
     console.log("🚀 Iniciando sistema unificado (Baileys + IA + Sheets)...");
-    console.log(`📁 Sesión Baileys: ${authFolder}`);
+    console.log("🐘 Sesión Baileys: PostgreSQL (tabla whatsapp_auth)");
 
     try {
-        const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+        const { state, saveCreds } = await usePostgresAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({
@@ -348,7 +336,7 @@ sock.ev.on("messages.upsert", async (m) => {
 }
 
 /**
- * Cierra WhatsApp, borra del disco todos los JSON de sesión (libera espacio) y vuelve a iniciar Baileys.
+ * Cierra WhatsApp, borra de Postgres toda la sesión almacenada y vuelve a iniciar Baileys.
  */
 export async function resetSession() {
     suppressReconnect = true;
@@ -368,8 +356,9 @@ export async function resetSession() {
 
     await new Promise((r) => setTimeout(r, 500));
 
-    const authFolder = resolveAuthFolder();
-    await rm(authFolder, { recursive: true, force: true }).catch(() => {});
+    await clearPostgresAuthState().catch((err) =>
+        console.error("❌ Error borrando la sesión en Postgres:", err)
+    );
 
     suppressReconnect = false;
     await startBaileys();
