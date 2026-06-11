@@ -71,6 +71,20 @@ function formatInventoryCaption(row) {
     };
 }
 
+/** Le da a la IA el contexto de la opción de menú elegida, para que no adivine la intención. */
+function buildIntentHint(state) {
+    switch (state) {
+        case "AWAITING_SEARCH":
+            return "El usuario quiere BUSCAR o VER un producto del inventario.";
+        case "AWAITING_SALE":
+            return "El usuario quiere REGISTRAR UNA VENTA.";
+        case "AWAITING_ADD_STOCK":
+            return "El usuario quiere INGRESAR o agregar stock.";
+        default:
+            return "";
+    }
+}
+
 export let sock = null;
 export let lastQr = null;
 export let isConnected = false;
@@ -227,9 +241,12 @@ sock.ev.on("messages.upsert", async (m) => {
         // Si el estado no es IDLE ni MAIN_MENU, asumimos que estamos procesando con IA
         await sock.sendPresenceUpdate("composing", jid);
         const history = getHistoryForJid(jid);
-        const aiResponse = await getChatCompletion(text, msg.pushName || "Cliente", history);
+        const intentHint = buildIntentHint(state);
+        const aiResponse = await getChatCompletion(text, msg.pushName || "Cliente", history, intentHint);
 
         // Procesar marcadores de la IA (Búsqueda, Venta, Stock)
+        let didReply = false;
+
         const searchParams = extractSearchParameters(aiResponse);
         if (searchParams) {
             const result = await fetchFromSheet("getInventario", searchParams);
@@ -243,9 +260,9 @@ sock.ev.on("messages.upsert", async (m) => {
                         await sock.sendMessage(jid, { text: caption });
                     }
                 }
-            } else {
-                await sock.sendMessage(jid, { text: "No encontré ese producto en el inventario." });
+                didReply = true;
             }
+            // Sin resultados: no mandamos "No encontré" acá; dejamos que el texto de la IA lo explique.
         }
 
         const saleParams = extractActionParameters(aiResponse, "RECORD_SALE");
@@ -284,12 +301,21 @@ sock.ev.on("messages.upsert", async (m) => {
         const addParams = extractActionParameters(aiResponse, "ADD_STOCK");
         if (addParams) {
             const res = await addStock(addParams.item, addParams.qty, addParams.price);
-            if (res.success) await sock.sendMessage(jid, { text: `✅ Stock actualizado: ${addParams.qty} de "${addParams.item}".` });
+            if (res.success) {
+                await sock.sendMessage(jid, { text: `✅ Stock actualizado: ${addParams.qty} de "${addParams.item}".` });
+                didReply = true;
+            }
         }
 
         const cleanMessage = aiResponse.replace(/\[.*?\]/g, "").trim();
         if (cleanMessage) {
             await sock.sendMessage(jid, { text: cleanMessage });
+            didReply = true;
+        }
+
+        // Si la IA no buscó, no vendió y no escribió nada útil, evitamos el silencio o el "No encontré" fuera de lugar.
+        if (!didReply) {
+            await sock.sendMessage(jid, { text: "No te entendí bien. Decime el nombre de un producto, o escribí *menu* para ver las opciones." });
         }
 
         appendTurn(jid, text, cleanMessage || "Procesado.");

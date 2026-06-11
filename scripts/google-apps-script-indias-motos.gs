@@ -43,6 +43,18 @@ function norm(s) {
 }
 
 /**
+ * ¿Aparecen TODAS las palabras de la búsqueda dentro del nombre normalizado?
+ * Tolera orden distinto y palabras intercaladas (ej: "aceite 20w50" => "Aceite motor 20W-50 1L").
+ */
+function matchesQuery(productNorm, queryRaw) {
+  var tokens = String(queryRaw || "").split(/\s+/)
+    .map(function(t) { return norm(t); })
+    .filter(function(t) { return t.length > 0; });
+  if (tokens.length === 0) return false;
+  return tokens.every(function(t) { return productNorm.indexOf(t) !== -1; });
+}
+
+/**
  * Busca un producto por nombre usando coincidencia estricta y luego flexible.
  */
 function findProductRow(rows, itemName) {
@@ -57,6 +69,11 @@ function findProductRow(rows, itemName) {
   // 2. Intento de coincidencia parcial (si el nombre en la hoja contiene la búsqueda)
   for (let i = 1; i < rows.length; i++) {
     if (norm(rows[i][1]).indexOf(normalizedSearch) !== -1) return i + 1;
+  }
+
+  // 3. Intento por palabras (todas las palabras de la búsqueda están en el nombre)
+  for (let i = 1; i < rows.length; i++) {
+    if (matchesQuery(norm(rows[i][1]), itemName)) return i + 1;
   }
 
   return -1;
@@ -101,11 +118,12 @@ function getInventario(params) {
     return item.nombre !== "";
   });
 
-  // Filtro de búsqueda
-  var q = norm(params.q || params.busqueda || "");
-  if (q && q !== "todos") {
+  // Filtro de búsqueda (por palabras: tolera orden distinto y palabras intercaladas)
+  var qRaw = params.q || params.busqueda || "";
+  var qNorm = norm(qRaw);
+  if (qNorm && qNorm !== "todos") {
     items = items.filter(function(item) {
-      return norm(item.nombre).indexOf(q) !== -1 || norm(item.sku).indexOf(q) !== -1;
+      return matchesQuery(norm(item.nombre), qRaw) || norm(item.sku).indexOf(qNorm) !== -1;
     });
   }
 

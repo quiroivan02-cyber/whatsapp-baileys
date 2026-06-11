@@ -4,37 +4,51 @@ import { config } from '../config/config.js';
 /**
  * Asistente: inventario en Google Sheets + envío por WhatsApp (datos reales vía API).
  */
-const SYSTEM_PROMPT = `Eres el asistente de "Indias motos". Gestionas inventario de motocicletas y repuestos.
+const SYSTEM_PROMPT = `Eres el asistente de "Indias Motos", una tienda de motos. Ayudas al dueño a gestionar inventario y ventas. Responde SIEMPRE breve y en español neutro.
 
-REGLAS DE ORO (Ahorro de tokens):
-1. Si el usuario elige una opción del menú, NO uses la IA para responder "entendido", hazlo tú directamente en el código si puedes, pero si llegas aquí, ve al grano.
-2. Para VENTAS: Extrae el NOMBRE exacto del producto. Si el usuario dice "20W50", busca "Aceite" o el nombre completo que aparezca en el historial.
-3. Si el usuario confirma con "si", "no", "confirmar", NO generes marcadores, solo responde cordialmente.
+CÓMO ACTÚAS (muy importante):
+Solo puedes ejecutar acciones mediante estos MARCADORES. El sistema los ejecuta; tú nunca inventes datos de inventario.
 
-MARCADORES:
-- [SHEET_SEARCH:q=palabra_clave] (Usa palabras clave, ej: "aceite" en lugar de "20W50")
-- [RECORD_SALE:item=Nombre Completo|qty=1] (Usa el nombre lo más completo posible para que coincida en la hoja)
-- [ADD_STOCK:item=Nombre|qty=1|price=0]
+1) BUSCAR un producto → [SHEET_SEARCH:q=PALABRA_CLAVE]
+   - Úsalo SOLO cuando el usuario pide ver/buscar un producto o consultar stock.
+   - Usa 1 o 2 palabras clave cortas (ej: "aceite", "filtro", "llanta"), NUNCA la frase completa ni códigos como "20W50".
+   - NO repitas una búsqueda que ya hiciste. Si ya mostraste un producto, no lo vuelvas a buscar.
 
-CONSEJO: Sé breve. Español colombiano.`;
+2) REGISTRAR una venta → [RECORD_SALE:item=NOMBRE|qty=CANTIDAD]
+   - Úsalo SOLO cuando tengas el producto Y la cantidad.
+   - Usa el nombre más completo que aparezca en la conversación.
+
+3) INGRESAR stock → [ADD_STOCK:item=NOMBRE|qty=CANTIDAD|price=COSTO]
+
+NUNCA uses marcadores cuando el usuario:
+- confirma o niega (si, no, ok, dale, listo)
+- da solo un número o una cantidad
+- saluda, agradece o hace una pregunta general
+- pide ver VENTAS o CONTABILIDAD → responde que esa función aún no está disponible y sugiérele escribir "menu". NO busques en el inventario.
+
+Si te falta un dato (el producto o la cantidad), PREGÚNTALO con una frase corta, sin usar marcadores.`;
 
 /**
  * Solicita una respuesta al modelo de Groq.
  */
-export async function getChatCompletion(userMessage, userName = 'Customer', history = []) {
+export async function getChatCompletion(userMessage, userName = 'Customer', history = [], intentHint = '') {
   if (!config.aiConfig.apiKey) {
     console.error('❌ GROQ_API_KEY is missing in config');
     return 'Lo siento, tengo un problema técnico. ¿Podrías intentar más tarde?';
   }
-  
+
   try {
     console.log(`🤖 Consulting AI for user: ${userName}...`);
-    
+
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT },
-      ...history,
-      { role: 'user', content: userMessage }
     ];
+    if (intentHint) {
+      messages.push({ role: 'system', content: `Contexto actual: ${intentHint}` });
+    }
+    // Solo los últimos turnos: menos tokens y menos sesgo del historial.
+    messages.push(...history.slice(-8));
+    messages.push({ role: 'user', content: userMessage });
     
     const headers = {
       'Content-Type': 'application/json',
@@ -48,7 +62,7 @@ export async function getChatCompletion(userMessage, userName = 'Customer', hist
         model: config.aiConfig.model,
         messages: messages,
         temperature: 0.7,
-        max_tokens: 550,
+        max_tokens: 400,
       }),
     });
 
