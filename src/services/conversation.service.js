@@ -4,8 +4,6 @@
  */
 
 const store = new Map();
-/** Última consulta a Sheets por JID (evita reenviar las mismas fichas). */
-const lastSheetQueryKey = new Map();
 /** Estado de la conversación por JID (ej: 'MAIN_MENU', 'AWAITING_SALE') */
 const states = new Map();
 /** Datos temporales para confirmaciones (ej: venta pendiente) */
@@ -58,17 +56,7 @@ export function appendTurn(jid, userText, assistantText) {
     store.set(jid, list);
 }
 
-export function getLastSheetQueryKey(jid) {
-    if (!jid) return null;
-    return lastSheetQueryKey.get(jid) ?? null;
-}
-
-export function setLastSheetQueryKey(jid, key) {
-    if (jid && key) lastSheetQueryKey.set(jid, key);
-}
-
 export function clearHistoryForJid(jid) {
     if (!jid) return;
     store.delete(jid);
-    lastSheetQueryKey.delete(jid);
 }

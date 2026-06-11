@@ -19,11 +19,11 @@ MARCADORES:
 CONSEJO: Sé breve. Español colombiano.`;
 
 /**
- * Request completion from OpenRouter
+ * Solicita una respuesta al modelo de Groq.
  */
 export async function getChatCompletion(userMessage, userName = 'Customer', history = []) {
   if (!config.aiConfig.apiKey) {
-    console.error('❌ OPENROUTER_API_KEY is missing in config');
+    console.error('❌ GROQ_API_KEY is missing in config');
     return 'Lo siento, tengo un problema técnico. ¿Podrías intentar más tarde?';
   }
   
