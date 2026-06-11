@@ -1,6 +1,14 @@
 // ========================================
 // API REST — WhatsApp Bot Inventario Indias Motos
 // Hojas requeridas: Inventario, Ventas, Contabilidad
+//
+// ESTRUCTURA DE COLUMNAS (¡importante respetarla!):
+//   Inventario:   A=ID | B=Nombre Producto | C=Cantidad | D=Costo Und | E=Precio Venta | F=Subtotal(opcional)
+//   Ventas:       A=ID Venta | B=ID Producto | C=Producto | D=Cantidad | E=Precio Venta Und | F=Costo Und | G=Total Venta | H=Ganancia | I=Fecha/Hora
+//   Contabilidad: A=Fecha/Hora | B=Descripción | C=Monto | D=Tipo | E=Ganancia
+//
+// NOTA: las pestañas Ventas y Contabilidad DEBEN tener su fila 1 de encabezados,
+// si no, el ID de venta se repite (la numeración arranca a partir de la fila 2).
 // ========================================
 
 const SHEET_INVENTARIO = "Inventario";
@@ -8,7 +16,7 @@ const SHEET_VENTAS = "Ventas";
 const SHEET_CONTABILIDAD = "Contabilidad";
 
 /**
- * Convierte precio de la celda a número.
+ * Convierte el valor de una celda (texto o número) a número.
  */
 function parseNumber(value) {
   if (value === null || value === undefined || value === "") return 0;
@@ -17,11 +25,19 @@ function parseNumber(value) {
   return parseFloat(s) || 0;
 }
 
+/**
+ * Formatea un número como moneda colombiana ($1.234.567), sin depender del locale.
+ */
+function fmt(n) {
+  var num = Math.round(Number(n) || 0);
+  return "$" + num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
 function norm(s) {
   return String(s || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // Quitar acentos
+    .replace(new RegExp("[\\u0300-\\u036f]", "g"), "") // Quitar acentos (escape ASCII, seguro para copiar/pegar)
     .replace(/[^a-z0-9]/g, "")       // Quitar todo lo que no sea letra o número (especialmente guiones y espacios)
     .trim();
 }
@@ -75,10 +91,11 @@ function getInventario(params) {
 
   var items = rows.map(function(row) {
     return {
-      sku: row[0],         // Col A: ID
-      nombre: row[1],      // Col B: Nombre Producto
+      sku: row[0],                  // Col A: ID
+      nombre: row[1],               // Col B: Nombre Producto
       stock: parseInt(row[2]) || 0, // Col C: Cantidad
-      precio: parseNumber(row[3]),  // Col D: Costo Und
+      costo: parseNumber(row[3]),   // Col D: Costo Und
+      precio: parseNumber(row[4]),  // Col E: Precio Venta (lo que ve/paga el cliente)
     };
   }).filter(function(item) {
     return item.nombre !== "";
@@ -119,19 +136,19 @@ function addStock(data) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INVENTARIO);
   const rows = sheet.getDataRange().getValues();
   const qty = parseInt(data.qty) || 0;
-  const price = data.price || null;
+  const cost = data.price ? parseNumber(data.price) : null; // En "ingresar inventario", el precio = costo
 
   const foundIndex = findProductRow(rows, data.item);
 
   if (foundIndex !== -1) {
     const currentStock = parseInt(rows[foundIndex - 1][2]) || 0;
-    sheet.getRange(foundIndex, 3).setValue(currentStock + qty);
-    if (price) sheet.getRange(foundIndex, 4).setValue(price);
+    sheet.getRange(foundIndex, 3).setValue(currentStock + qty); // C: Cantidad
+    if (cost) sheet.getRange(foundIndex, 4).setValue(cost);     // D: Costo Und
     return createJsonResponse({ success: true, message: "Stock actualizado" });
   }
 
-  // Si no existe, crear nuevo
-  sheet.appendRow([rows.length, data.item, qty, price || 0]);
+  // Si no existe, crear nuevo. Precio Venta arranca igual al costo (ajustable luego en la hoja).
+  sheet.appendRow([rows.length, data.item, qty, cost || 0, cost || 0]);
   return createJsonResponse({ success: true, message: "Nuevo producto creado" });
 }
 
@@ -139,7 +156,7 @@ function sellInventory(data) {
   const invSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INVENTARIO);
   const salesSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_VENTAS);
   const contSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CONTABILIDAD);
-  
+
   const rows = invSheet.getDataRange().getValues();
   const qty = parseInt(data.qty) || 0;
 
@@ -149,42 +166,54 @@ function sellInventory(data) {
     return createJsonResponse({ success: false, error: "Producto '" + data.item + "' no encontrado. Intenta con un nombre más claro (ej: Aceite)." });
   }
 
-  const productId = rows[foundIndex-1][0];
-  const unitPrice = parseNumber(rows[foundIndex-1][3]);
-  const finalName = rows[foundIndex-1][1];
+  const productId = rows[foundIndex - 1][0];
+  const finalName = rows[foundIndex - 1][1];
+  const costoUnd = parseNumber(rows[foundIndex - 1][3]);    // Col D: Costo Und
+  let precioVenta = parseNumber(rows[foundIndex - 1][4]);   // Col E: Precio Venta
+  if (!precioVenta) precioVenta = costoUnd;                 // Fallback: si no se cargó precio de venta, usa el costo
 
-  const currentStock = parseInt(rows[foundIndex-1][2]) || 0;
+  const currentStock = parseInt(rows[foundIndex - 1][2]) || 0;
   if (currentStock < qty) {
     return createJsonResponse({ success: false, error: "Stock insuficiente para " + finalName + ". Disponible: " + currentStock });
   }
 
-  // 1. Actualizar Stock
-  invSheet.getRange(foundIndex, 3).setValue(currentStock - qty);
+  const totalVenta = precioVenta * qty;
+  const totalCosto = costoUnd * qty;
+  const ganancia = totalVenta - totalCosto;
+  const stockFinal = currentStock - qty;
 
-  // 2. Registrar en VENTAS
+  // 1. Actualizar Stock
+  invSheet.getRange(foundIndex, 3).setValue(stockFinal);
+
+  // 2. Preparar timestamp e ID de venta secuencial
   const now = new Date();
-  const totalVenta = unitPrice * qty;
   const timestamp = Utilities.formatDate(now, "GMT-5", "dd/MM/yyyy HH:mm:ss");
-  
-  // Generar ID secuencial
+
   let idVenta = 1;
-  const lastRow = salesSheet.getLastRow();
-  if (lastRow > 1) {
-    const lastId = salesSheet.getRange(lastRow, 1).getValue();
-    if (!isNaN(lastId)) {
-      idVenta = parseInt(lastId) + 1;
+  if (salesSheet) {
+    const lastRow = salesSheet.getLastRow();
+    if (lastRow > 1) {
+      const lastId = salesSheet.getRange(lastRow, 1).getValue();
+      if (!isNaN(lastId)) idVenta = parseInt(lastId) + 1;
     }
   }
 
-  // Nueva estructura de Ventas: id_venta, id_producto, cantidad, precio_Venta, fecha_hora
+  // 3. Registrar en VENTAS (con margen)
   if (salesSheet) {
-    salesSheet.appendRow([idVenta, productId, qty, unitPrice, timestamp]);
+    salesSheet.appendRow([idVenta, productId, finalName, qty, precioVenta, costoUnd, totalVenta, ganancia, timestamp]);
   }
 
-  // 3. Registrar en CONTABILIDAD (Ingreso por venta)
+  // 4. Registrar en CONTABILIDAD (ingreso real + ganancia)
   if (contSheet) {
-    contSheet.appendRow([timestamp, "VENTA: " + finalName + " (ID: " + idVenta + ")", totalVenta, "INGRESO"]);
+    contSheet.appendRow([timestamp, "VENTA: " + finalName + " (ID: " + idVenta + ")", totalVenta, "INGRESO", ganancia]);
   }
 
-  return createJsonResponse({ success: true, message: "Venta registrada (" + idVenta + "), stock actualizado." });
+  return createJsonResponse({
+    success: true,
+    message: "Venta #" + idVenta + ": " + qty + "x " + finalName + " = " + fmt(totalVenta) + " (ganancia " + fmt(ganancia) + "). Stock restante: " + stockFinal + ".",
+    idVenta: idVenta,
+    total: totalVenta,
+    ganancia: ganancia,
+    stock: stockFinal
+  });
 }

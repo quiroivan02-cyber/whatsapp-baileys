@@ -187,7 +187,7 @@ sock.ev.on("messages.upsert", async (m) => {
                     await sock.sendPresenceUpdate("composing", jid);
                     const res = await recordSale(pendingSale.item, pendingSale.qty);
                     if (res.success) {
-                        await sock.sendMessage(jid, { text: `✅ Venta registrada con éxito. El stock se ha actualizado.` });
+                        await sock.sendMessage(jid, { text: res.message ? `✅ ${res.message}` : "✅ Venta registrada con éxito. El stock se ha actualizado." });
                     } else {
                         await sock.sendMessage(jid, { text: `❌ Error: ${res.error}` });
                     }
