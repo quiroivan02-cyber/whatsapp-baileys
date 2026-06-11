@@ -213,7 +213,8 @@ sock.ev.on("messages.upsert", async (m) => {
                 return;
             }
 
-            const result = await fetchFromSheet("getInventario", { q: text });
+            const query = text.replace(/^\d+\s+(de\s+)?/i, "").trim() || text;
+            const result = await fetchFromSheet("getInventario", { q: query });
             const rows = getRowsFromSheetResponse(result);
             if (result.success && rows.length > 0) {
                 for (const row of rows.slice(0, 5)) {
@@ -230,7 +231,9 @@ sock.ev.on("messages.upsert", async (m) => {
 
         // ---------- OPCIÓN 3: REGISTRAR VENTA (flujo determinista) ----------
         if (state === "AWAITING_SALE") {
-            const result = await fetchFromSheet("getInventario", { q: text });
+            // Si escriben "2 llantas", quitamos la cantidad inicial para buscar solo el producto.
+            const query = text.replace(/^\d+\s+(de\s+)?/i, "").trim() || text;
+            const result = await fetchFromSheet("getInventario", { q: query });
             const rows = getRowsFromSheetResponse(result);
             if (!result.success || rows.length === 0) {
                 await sock.sendMessage(jid, { text: `No encontré "${text}" en el inventario. Decime otro nombre o palabra clave (ej: aceite, llanta).` });

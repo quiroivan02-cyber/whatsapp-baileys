@@ -51,7 +51,12 @@ function matchesQuery(productNorm, queryRaw) {
     .map(function(t) { return norm(t); })
     .filter(function(t) { return t.length > 0; });
   if (tokens.length === 0) return false;
-  return tokens.every(function(t) { return productNorm.indexOf(t) !== -1; });
+  return tokens.every(function(t) {
+    if (productNorm.indexOf(t) !== -1) return true;
+    // Tolera plural simple: "llantas" => "llanta", "aceites" => "aceite".
+    if (t.length > 3 && t.charAt(t.length - 1) === "s" && productNorm.indexOf(t.slice(0, -1)) !== -1) return true;
+    return false;
+  });
 }
 
 /**
