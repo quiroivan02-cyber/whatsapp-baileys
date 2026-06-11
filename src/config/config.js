@@ -10,6 +10,9 @@ export const config = {
   // Database Configuration (PostgreSQL)
   databaseUrl: process.env.DATABASE_URL || "",
 
+  // Token para proteger rutas sensibles del panel (/qr, /reset) vía Basic Auth
+  adminToken: process.env.ADMIN_TOKEN || "",
+
   // Google Sheets API Configuration (Apps Script URL)
   sheetsConfig: {
     apiUrl: process.env.SHEETS_API_URL || "",
@@ -17,31 +20,19 @@ export const config = {
 
   // AI Configuration (Groq)
   aiConfig: {
-    apiKey: process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || "",
+    apiKey: process.env.GROQ_API_KEY || "",
     // Modelo predeterminado para Groq
     model:
       process.env.GROQ_MODEL ||
       process.env.AI_MODEL ||
       "llama-3.3-70b-versatile",
-    httpReferer: process.env.OPENROUTER_HTTP_REFERER || "http://localhost:3000",
   },
 
-  // Baileys: carpeta de sesión (en Render monta un disco persistente y apunta aquí, ej. /data/baileys-auth)
-  baileysAuthDir: process.env.BAILEYS_AUTH_DIR || "auth_info_baileys",
-
-  sessionsDir: process.env.SESSIONS_DIR || "./sessions",
-
-  // Real Estate Bot Business Logic
+  // Identidad del negocio
   botConfig: {
-    company: process.env.BOT_COMPANY || "Inmobiliaria Prime",
-    salesRep: process.env.BOT_SALES_REP || "Sofia",
-    locations: [
-      "Bogotá",
-      "Medellín",
-      "Pereira",
-      "Cali"
-    ]
-  }
+    company: process.env.BOT_COMPANY || "Indias Motos",
+    salesRep: process.env.BOT_SALES_REP || "Asistente",
+  },
 };
 
 /**
@@ -59,7 +50,11 @@ export function validateConfig() {
   }
 
   if (!config.aiConfig.apiKey) {
-    missingConfigs.push("GROQ_API_KEY"); 
+    missingConfigs.push("GROQ_API_KEY");
+  }
+
+  if (!config.adminToken) {
+    console.warn("⚠️  ADMIN_TOKEN no configurado: /qr y /reset quedarán bloqueados hasta definirlo.");
   }
 
   if (missingConfigs.length > 0) {
