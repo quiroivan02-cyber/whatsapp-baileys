@@ -123,8 +123,8 @@ export async function saveToSheet(data, action = "saveCita") {
   }
 }
 
-export async function addStock(item, qty, price) {
-    return saveToSheet({ item, qty, price }, "addStock");
+export async function addStock(item, qty, price, isNew = false) {
+    return saveToSheet({ item, qty, price, new: isNew }, "addStock");
 }
 
 export async function recordSale(item, qty) {

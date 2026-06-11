@@ -33,12 +33,23 @@ const MAIN_MENU = `Hola, buen día. Soy tu agente de Indias motos. 🏍️
 1. Ver estado de inventario 📦
 2. Ingresar inventario ➕
 3. Inventario vendido 🧾
+4. Informe contable 📊
 
 Responde con el número de la opción que desees o escribe "menu" en cualquier momento.`;
 
 function formatCOP(value) {
     const n = Number(String(value).replace(/[^\d.-]/g, ""));
     if (!Number.isFinite(n) || n <= 0) return String(value);
+    return new Intl.NumberFormat("es-CO", {
+        style: "currency",
+        currency: "COP",
+        maximumFractionDigits: 0,
+    }).format(n);
+}
+
+/** Formatea montos para informes: muestra $0 y negativos correctamente. */
+function formatMoney(value) {
+    const n = Math.round(Number(String(value).replace(/[^\d.-]/g, "")) || 0);
     return new Intl.NumberFormat("es-CO", {
         style: "currency",
         currency: "COP",
@@ -182,13 +193,16 @@ sock.ev.on("messages.upsert", async (m) => {
                 await sock.sendMessage(jid, { text: "¿Qué producto querés ver? Escribí una palabra clave (ej: aceite, llanta) o *todos* para el PDF." });
                 setStateForJid(jid, "AWAITING_SEARCH");
             } else if (text === "2") {
-                await sock.sendMessage(jid, { text: "Vamos a ingresar inventario. ¿Cuál es el *nombre* del producto?" });
-                setStateForJid(jid, "AWAITING_ADD_NAME");
+                await sock.sendMessage(jid, { text: "Vamos a ingresar inventario. ¿Qué producto? Escribí el nombre o palabra clave (si ya existe, le sumamos stock)." });
+                setStateForJid(jid, "AWAITING_ADD_SEARCH");
             } else if (text === "3") {
                 await sock.sendMessage(jid, { text: "Vamos a registrar una venta. ¿Qué producto se vendió? (nombre o palabra clave)" });
                 setStateForJid(jid, "AWAITING_SALE");
+            } else if (text === "4") {
+                await sock.sendMessage(jid, { text: "📊 ¿De qué período querés el informe?\n\n*1.* Quincena (la actual)\n*2.* Este mes" });
+                setStateForJid(jid, "AWAITING_REPORT_PERIOD");
             } else {
-                await sock.sendMessage(jid, { text: "Opción no válida. Elegí 1, 2 o 3, o escribí *menu*." });
+                await sock.sendMessage(jid, { text: "Opción no válida. Elegí 1, 2, 3 o 4, o escribí *menu*." });
             }
             return;
         }
@@ -312,10 +326,54 @@ sock.ev.on("messages.upsert", async (m) => {
             return;
         }
 
-        // ---------- OPCIÓN 2: INGRESAR INVENTARIO (flujo guiado) ----------
+        // ---------- OPCIÓN 2: INGRESAR INVENTARIO (existente o nuevo) ----------
+        if (state === "AWAITING_ADD_SEARCH") {
+            const query = text.replace(/^\d+\s+(de\s+)?/i, "").trim() || text;
+            const result = await fetchFromSheet("getInventario", { q: query });
+            const rows = getRowsFromSheetResponse(result);
+            if (result.success && rows.length > 0) {
+                const candidates = rows.slice(0, 5);
+                setTempBufferForJid(jid, { candidates });
+                let listMsg = "¿A cuál le sumás stock?\n";
+                candidates.forEach((r, i) => {
+                    listMsg += `\n*${i + 1}.* ${r.nombre} (stock ${r.stock})`;
+                });
+                listMsg += `\n*${candidates.length + 1}.* ➕ Es un producto NUEVO`;
+                listMsg += "\n\nRespondé con el número.";
+                await sock.sendMessage(jid, { text: listMsg });
+                setStateForJid(jid, "AWAITING_ADD_PICK");
+            } else {
+                setTempBufferForJid(jid, { name: text, isNew: true });
+                await sock.sendMessage(jid, { text: `No existe "${text}", lo creo como producto NUEVO.\n¿Cuántas unidades vas a ingresar?` });
+                setStateForJid(jid, "AWAITING_ADD_QTY");
+            }
+            return;
+        }
+
+        if (state === "AWAITING_ADD_PICK") {
+            const buf = getTempBufferForJid(jid);
+            const n = parseQty(text);
+            const count = buf?.candidates?.length || 0;
+            if (!buf?.candidates || Number.isNaN(n) || n < 1 || n > count + 1) {
+                await sock.sendMessage(jid, { text: "Respondé con el número de la lista." });
+                return;
+            }
+            if (n === count + 1) {
+                setTempBufferForJid(jid, { isNew: true });
+                await sock.sendMessage(jid, { text: "¿Cuál es el *nombre* del nuevo producto?" });
+                setStateForJid(jid, "AWAITING_ADD_NAME");
+                return;
+            }
+            const product = buf.candidates[n - 1];
+            setTempBufferForJid(jid, { name: product.nombre, isNew: false });
+            await sock.sendMessage(jid, { text: `Sumar stock a *${product.nombre}* (actual: ${product.stock}).\n¿Cuántas unidades vas a ingresar?` });
+            setStateForJid(jid, "AWAITING_ADD_QTY");
+            return;
+        }
+
         if (state === "AWAITING_ADD_NAME") {
-            setTempBufferForJid(jid, { name: text });
-            await sock.sendMessage(jid, { text: `Producto: *${text}*.\n¿Cuántas unidades vas a ingresar?` });
+            setTempBufferForJid(jid, { name: text, isNew: true });
+            await sock.sendMessage(jid, { text: `Producto nuevo: *${text}*.\n¿Cuántas unidades vas a ingresar?` });
             setStateForJid(jid, "AWAITING_ADD_QTY");
             return;
         }
@@ -327,7 +385,7 @@ sock.ev.on("messages.upsert", async (m) => {
                 await sock.sendMessage(jid, { text: "Decime un número válido de unidades (ej: 5)." });
                 return;
             }
-            setTempBufferForJid(jid, { name: buf.name, qty });
+            setTempBufferForJid(jid, { ...buf, qty });
             await sock.sendMessage(jid, { text: "¿Cuál es el *costo* por unidad? (ej: 25000)" });
             setStateForJid(jid, "AWAITING_ADD_COST");
             return;
@@ -341,8 +399,37 @@ sock.ev.on("messages.upsert", async (m) => {
                 return;
             }
             await sock.sendPresenceUpdate("composing", jid);
-            const res = await addStock(buf.name, buf.qty, cost);
+            const res = await addStock(buf.name, buf.qty, cost, buf.isNew === true);
             await sock.sendMessage(jid, { text: res.success ? `✅ ${res.message || "Inventario actualizado."} (${buf.qty}x ${buf.name}, costo ${formatCOP(cost)})` : `❌ ${res.error || "No pude ingresar el inventario."}` });
+            clearTempBufferForJid(jid);
+            setStateForJid(jid, "IDLE");
+            await sock.sendMessage(jid, { text: "Escribí *menu* para otra operación." });
+            return;
+        }
+
+        // ---------- OPCIÓN 4: INFORME CONTABLE ----------
+        if (state === "AWAITING_REPORT_PERIOD") {
+            let period = null;
+            if (lower.includes("quincena") || text === "1") period = "quincena";
+            else if (lower.includes("mes") || text === "2") period = "mes";
+            if (!period) {
+                await sock.sendMessage(jid, { text: "Respondé *1* (quincena) o *2* (este mes)." });
+                return;
+            }
+            await sock.sendPresenceUpdate("composing", jid);
+            const result = await fetchFromSheet("getReporte", { period });
+            if (result.success) {
+                const msg =
+                    `📊 *Informe contable — ${result.period}*\n\n` +
+                    `🧾 Ventas: ${result.ventas}\n` +
+                    `💰 Total vendido: ${formatMoney(result.ingresos)}\n` +
+                    `📉 Gastos en inventario: ${formatMoney(result.egresos)}\n` +
+                    `📈 Ganancia de ventas: ${formatMoney(result.ganancia)}\n` +
+                    `💵 Flujo neto (ventas − gastos): ${formatMoney(result.neto)}`;
+                await sock.sendMessage(jid, { text: msg });
+            } else {
+                await sock.sendMessage(jid, { text: `No pude generar el informe: ${result.error || "error"}` });
+            }
             clearTempBufferForJid(jid);
             setStateForJid(jid, "IDLE");
             await sock.sendMessage(jid, { text: "Escribí *menu* para otra operación." });

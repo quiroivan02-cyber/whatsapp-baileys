@@ -98,6 +98,10 @@ function doGet(e) {
       return getInventario(params);
     }
 
+    if (action === "getReporte") {
+      return getReporte(params);
+    }
+
     return createJsonResponse({ success: false, error: "Acción no válida" });
   } catch (error) {
     return createJsonResponse({ success: false, error: error.toString() });
@@ -161,18 +165,32 @@ function addStock(data) {
   const qty = parseInt(data.qty) || 0;
   const cost = data.price ? parseNumber(data.price) : null; // En "ingresar inventario", el precio = costo
 
-  const foundIndex = findProductRow(rows, data.item);
+  // Si el bot indica que es NUEVO, no buscamos coincidencia (evita fusiones por nombre parecido).
+  const foundIndex = data.new ? -1 : findProductRow(rows, data.item);
 
+  let message;
+  let nombreFinal = data.item;
   if (foundIndex !== -1) {
+    nombreFinal = rows[foundIndex - 1][1];
     const currentStock = parseInt(rows[foundIndex - 1][2]) || 0;
     sheet.getRange(foundIndex, 3).setValue(currentStock + qty); // C: Cantidad
     if (cost) sheet.getRange(foundIndex, 4).setValue(cost);     // D: Costo Und
-    return createJsonResponse({ success: true, message: "Stock actualizado" });
+    message = "Stock actualizado";
+  } else {
+    // Crear nuevo. Precio Venta arranca igual al costo (ajustable luego en la hoja).
+    sheet.appendRow([rows.length, data.item, qty, cost || 0, cost || 0]);
+    message = "Nuevo producto creado";
   }
 
-  // Si no existe, crear nuevo. Precio Venta arranca igual al costo (ajustable luego en la hoja).
-  sheet.appendRow([rows.length, data.item, qty, cost || 0, cost || 0]);
-  return createJsonResponse({ success: true, message: "Nuevo producto creado" });
+  // Registrar el EGRESO (gasto por compra de inventario) en Contabilidad.
+  const contSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CONTABILIDAD);
+  if (contSheet && cost) {
+    const totalGasto = cost * qty;
+    const timestamp = Utilities.formatDate(new Date(), "GMT-5", "dd/MM/yyyy HH:mm:ss");
+    contSheet.appendRow([timestamp, "COMPRA: " + nombreFinal + " x" + qty, totalGasto, "EGRESO", ""]);
+  }
+
+  return createJsonResponse({ success: true, message: message });
 }
 
 function sellInventory(data) {
@@ -239,4 +257,60 @@ function sellInventory(data) {
     ganancia: ganancia,
     stock: stockFinal
   });
+}
+
+// --- INFORME CONTABLE (lectura por período) ---
+function getReporte(params) {
+  const contSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CONTABILIDAD);
+  if (!contSheet) return createJsonResponse({ success: false, error: "Hoja Contabilidad no encontrada" });
+
+  const data = contSheet.getDataRange().getValues();
+  const rows = data.slice(1); // omitir encabezado
+  const range = getPeriodRange(String(params.period || "mes"));
+
+  var ingresos = 0, egresos = 0, ganancia = 0, ventas = 0;
+  rows.forEach(function(r) {
+    var fecha = parseSheetDate(r[0]);                // Col A: Fecha/Hora
+    if (!fecha || fecha < range.start || fecha > range.end) return;
+    var tipo = String(r[3] || "").toUpperCase();     // Col D: Tipo
+    var monto = parseNumber(r[2]);                    // Col C: Monto
+    if (tipo === "INGRESO") {
+      ingresos += monto;
+      ventas += 1;
+      ganancia += parseNumber(r[4]);                 // Col E: Ganancia
+    } else if (tipo === "EGRESO") {
+      egresos += monto;
+    }
+  });
+
+  return createJsonResponse({
+    success: true,
+    period: range.label,
+    ingresos: ingresos,
+    egresos: egresos,
+    ganancia: ganancia,
+    ventas: ventas,
+    neto: ingresos - egresos
+  });
+}
+
+/** Convierte "dd/MM/yyyy HH:mm:ss" (o un Date) a Date. */
+function parseSheetDate(value) {
+  if (value instanceof Date) return value;
+  var m = String(value || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+}
+
+/** Rango de fechas: "quincena" (1-15 o 16-fin según hoy) o "mes" (mes actual completo). */
+function getPeriodRange(period) {
+  var now = new Date();
+  var y = now.getFullYear(), mo = now.getMonth(), d = now.getDate();
+  if (period === "quincena") {
+    if (d <= 15) {
+      return { start: new Date(y, mo, 1), end: new Date(y, mo, 15, 23, 59, 59), label: "quincena (1 al 15)" };
+    }
+    return { start: new Date(y, mo, 16), end: new Date(y, mo + 1, 0, 23, 59, 59), label: "quincena (16 a fin de mes)" };
+  }
+  return { start: new Date(y, mo, 1), end: new Date(y, mo + 1, 0, 23, 59, 59), label: "este mes" };
 }
