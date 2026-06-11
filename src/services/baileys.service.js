@@ -17,11 +17,10 @@ import {
 import {
     fetchFromSheet,
     getRowsFromSheetResponse,
-    saveToSheet,
     addStock,
     recordSale,
 } from "./sheets.service.js";
-import { getChatCompletion, extractSearchParameters, extractActionParameters } from "./ai.service.js";
+import { getChatCompletion } from "./ai.service.js";
 import { generateInventoryPdf } from "./pdf.service.js";
 import fs from "fs";
 
@@ -71,18 +70,26 @@ function formatInventoryCaption(row) {
     };
 }
 
-/** Le da a la IA el contexto de la opción de menú elegida, para que no adivine la intención. */
-function buildIntentHint(state) {
-    switch (state) {
-        case "AWAITING_SEARCH":
-            return "El usuario quiere BUSCAR o VER un producto del inventario.";
-        case "AWAITING_SALE":
-            return "El usuario quiere REGISTRAR UNA VENTA.";
-        case "AWAITING_ADD_STOCK":
-            return "El usuario quiere INGRESAR o agregar stock.";
-        default:
-            return "";
+/** Envía una fila de inventario como tarjeta (con foto si hay URL). */
+async function sendProductCard(jid, row) {
+    const { caption, photo } = formatInventoryCaption(row);
+    if (photo && /^https?:\/\//i.test(photo)) {
+        await sock.sendMessage(jid, { image: { url: photo }, caption });
+    } else {
+        await sock.sendMessage(jid, { text: caption });
     }
+}
+
+/** Extrae el primer entero del texto (cantidad). */
+function parseQty(text) {
+    const m = String(text).match(/\d+/);
+    return m ? parseInt(m[0], 10) : NaN;
+}
+
+/** Extrae un monto en pesos del texto: "25.000" o "$ 25000" -> 25000. */
+function parseMoney(text) {
+    const digits = String(text).replace(/[^\d]/g, "");
+    return digits ? parseInt(digits, 10) : NaN;
 }
 
 export let sock = null;
@@ -158,69 +165,37 @@ sock.ev.on("messages.upsert", async (m) => {
 
     try {
         const state = getStateForJid(jid);
+        const lower = text.toLowerCase();
         startUserTimer(jid);
 
-        // 1. Comando 'menu' o 'menú' - Siempre disponible
-        if (text.toLowerCase() === "menu" || text.toLowerCase() === "menú") {
+        // 'menu' siempre disponible (corta cualquier flujo en curso)
+        if (lower === "menu" || lower === "menú") {
             await sock.sendMessage(jid, { text: MAIN_MENU });
             setStateForJid(jid, "MAIN_MENU");
+            clearTempBufferForJid(jid);
             return;
         }
 
-        // 2. Estado inicial o expirado: Solo saludo básico
-        if (state === "IDLE") {
-            await sock.sendMessage(jid, { text: "Hola, soy tu asistente de Indias motos. 🏍️\n\nSi quieres ver el menú de opciones, escribe *menu*." });
-            return;
-        }
-
-        // 3. Manejo de Selección de Menú (Paso de IDLE/IDLE_MENU a Acción)
+        // Selección de menú
         if (state === "MAIN_MENU") {
             if (text === "1") {
-                await sock.sendMessage(jid, { text: "Entendido. ¿Qué producto o categoría deseas buscar? (o escribe 'todos' para el PDF)" });
+                await sock.sendMessage(jid, { text: "¿Qué producto querés ver? Escribí una palabra clave (ej: aceite, llanta) o *todos* para el PDF." });
                 setStateForJid(jid, "AWAITING_SEARCH");
-                return;
             } else if (text === "2") {
-                await sock.sendMessage(jid, { text: "Por favor, dime qué producto vas a ingresar, la cantidad y el precio (ej: 5 Cascos a 80.000)" });
-                setStateForJid(jid, "AWAITING_ADD_STOCK");
-                return;
+                await sock.sendMessage(jid, { text: "Vamos a ingresar inventario. ¿Cuál es el *nombre* del producto?" });
+                setStateForJid(jid, "AWAITING_ADD_NAME");
             } else if (text === "3") {
-                await sock.sendMessage(jid, { text: "Por favor, dime qué producto se vendió y cuántas unidades (ej: Vendí 2 llantas)" });
+                await sock.sendMessage(jid, { text: "Vamos a registrar una venta. ¿Qué producto se vendió? (nombre o palabra clave)" });
                 setStateForJid(jid, "AWAITING_SALE");
-                return;
             } else {
-                await sock.sendMessage(jid, { text: "Opción no válida. Por favor selecciona 1, 2 o 3, o escribe *menu* para ver las opciones." });
-                return;
+                await sock.sendMessage(jid, { text: "Opción no válida. Elegí 1, 2 o 3, o escribí *menu*." });
             }
+            return;
         }
 
-        // 4. Lógica de Confirmación de Venta (Alta prioridad)
-        if (state === "CONFIRMING_SALE") {
-            if (text.toLowerCase().includes("si") || text.toLowerCase().includes("confirmar") || text === "1") {
-                const pendingSale = getTempBufferForJid(jid);
-                if (pendingSale) {
-                    await sock.sendPresenceUpdate("composing", jid);
-                    const res = await recordSale(pendingSale.item, pendingSale.qty);
-                    if (res.success) {
-                        await sock.sendMessage(jid, { text: res.message ? `✅ ${res.message}` : "✅ Venta registrada con éxito. El stock se ha actualizado." });
-                    } else {
-                        await sock.sendMessage(jid, { text: `❌ Error: ${res.error}` });
-                    }
-                    clearTempBufferForJid(jid);
-                    setStateForJid(jid, "AI_MODE"); // Mantener en modo IA tras acción
-                    return;
-                }
-            } else if (text.toLowerCase().includes("no") || text === "2") {
-                await sock.sendMessage(jid, { text: "Venta cancelada." });
-                clearTempBufferForJid(jid);
-                setStateForJid(jid, "AI_MODE");
-                return;
-            }
-        }
-
-        // 5. PDF Directo (Sin IA si está buscando)
+        // ---------- OPCIÓN 1: VER INVENTARIO (búsqueda determinista) ----------
         if (state === "AWAITING_SEARCH") {
-            const isTodo = text.toLowerCase() === "todos" || text.toLowerCase() === "todo";
-            if (isTodo) {
+            if (lower === "todos" || lower === "todo") {
                 await sock.sendMessage(jid, { text: "Generando reporte PDF completo... 📄" });
                 const result = await fetchFromSheet("getInventario", { q: "todos" });
                 const rows = getRowsFromSheetResponse(result);
@@ -229,96 +204,161 @@ sock.ev.on("messages.upsert", async (m) => {
                     await sock.sendMessage(jid, {
                         document: fs.readFileSync(pdfPath),
                         fileName: "Inventario_Indias_Motos.pdf",
-                        mimetype: "application/pdf"
+                        mimetype: "application/pdf",
                     });
                     fs.unlinkSync(pdfPath);
-                    return;
+                } else {
+                    await sock.sendMessage(jid, { text: "No pude leer el inventario ahora. Intentá más tarde." });
                 }
+                return;
             }
-        }
 
-        // 6. MODO IA (Se activa tras elegir opción del menú)
-        // Si el estado no es IDLE ni MAIN_MENU, asumimos que estamos procesando con IA
-        await sock.sendPresenceUpdate("composing", jid);
-        const history = getHistoryForJid(jid);
-        const intentHint = buildIntentHint(state);
-        const aiResponse = await getChatCompletion(text, msg.pushName || "Cliente", history, intentHint);
-
-        // Procesar marcadores de la IA (Búsqueda, Venta, Stock)
-        let didReply = false;
-
-        const searchParams = extractSearchParameters(aiResponse);
-        if (searchParams) {
-            const result = await fetchFromSheet("getInventario", searchParams);
+            const result = await fetchFromSheet("getInventario", { q: text });
             const rows = getRowsFromSheetResponse(result);
             if (result.success && rows.length > 0) {
                 for (const row of rows.slice(0, 5)) {
-                    const { caption, photo } = formatInventoryCaption(row);
-                    if (photo && /^https?:\/\//i.test(photo)) {
-                        await sock.sendMessage(jid, { image: { url: photo }, caption });
-                    } else {
-                        await sock.sendMessage(jid, { text: caption });
-                    }
+                    await sendProductCard(jid, row);
                 }
-                didReply = true;
-            }
-            // Sin resultados: no mandamos "No encontré" acá; dejamos que el texto de la IA lo explique.
-        }
-
-        const saleParams = extractActionParameters(aiResponse, "RECORD_SALE");
-        if (saleParams) {
-            // 1. Ir al inventario a buscar el producto real antes de confirmar
-            await sock.sendMessage(jid, { text: "Buscando producto en el inventario... 🔍" });
-            const searchResult = await fetchFromSheet("getInventario", { q: saleParams.item });
-            const foundRows = getRowsFromSheetResponse(searchResult);
-
-            if (searchResult.success && foundRows.length > 0) {
-                // Tomar el primer resultado encontrado
-                const product = foundRows[0];
-                const realName = product.nombre;
-                const realPrice = product.precio;
-
-                // 2. Guardar datos REALES de la hoja en el buffer
-                setTempBufferForJid(jid, { 
-                    item: realName, 
-                    qty: saleParams.qty,
-                    price: realPrice 
-                });
-                
-                setStateForJid(jid, "CONFIRMING_SALE");
-                
-                // 3. Confirmar con datos exactos
-                const confirmMsg = `¿Confirmar venta ${saleParams.qty} unidades de "${realName}" con precio de venta ${formatCOP(realPrice)}?\n\nResponde con *Si* para agregar a la base de datos o *No* para cancelar.`;
-                await sock.sendMessage(jid, { text: confirmMsg });
+                if (rows.length > 5) {
+                    await sock.sendMessage(jid, { text: `… y ${rows.length - 5} más. Afiná con una palabra más específica.` });
+                }
             } else {
-                // Si no se encuentra, pedir más claridad
-                await sock.sendMessage(jid, { text: `❌ No encontré el producto "${saleParams.item}" en el inventario.\n\nPor favor, dime el nombre más exacto o una palabra clave clara (ej: "aceite", "filtro", "llanta").` });
-                setStateForJid(jid, "AWAITING_SALE"); // Reintentar en el mismo estado
+                await sock.sendMessage(jid, { text: `No encontré "${text}". Probá otra palabra (ej: aceite, llanta) o escribí *menu*.` });
             }
             return;
         }
 
-        const addParams = extractActionParameters(aiResponse, "ADD_STOCK");
-        if (addParams) {
-            const res = await addStock(addParams.item, addParams.qty, addParams.price);
-            if (res.success) {
-                await sock.sendMessage(jid, { text: `✅ Stock actualizado: ${addParams.qty} de "${addParams.item}".` });
-                didReply = true;
+        // ---------- OPCIÓN 3: REGISTRAR VENTA (flujo determinista) ----------
+        if (state === "AWAITING_SALE") {
+            const result = await fetchFromSheet("getInventario", { q: text });
+            const rows = getRowsFromSheetResponse(result);
+            if (!result.success || rows.length === 0) {
+                await sock.sendMessage(jid, { text: `No encontré "${text}" en el inventario. Decime otro nombre o palabra clave (ej: aceite, llanta).` });
+                return;
             }
+            if (rows.length === 1) {
+                setTempBufferForJid(jid, { product: rows[0] });
+                await sock.sendMessage(jid, { text: `Seleccionaste *${rows[0].nombre}*.\n¿Cuántas unidades se vendieron?` });
+                setStateForJid(jid, "AWAITING_SALE_QTY");
+                return;
+            }
+            const candidates = rows.slice(0, 5);
+            setTempBufferForJid(jid, { candidates });
+            let listMsg = "Encontré varios, ¿cuál?\n";
+            candidates.forEach((r, i) => {
+                listMsg += `\n*${i + 1}.* ${r.nombre} — ${formatCOP(r.precio)} (stock ${r.stock})`;
+            });
+            listMsg += "\n\nRespondé con el número.";
+            await sock.sendMessage(jid, { text: listMsg });
+            setStateForJid(jid, "AWAITING_SALE_PICK");
+            return;
         }
 
-        const cleanMessage = aiResponse.replace(/\[.*?\]/g, "").trim();
-        if (cleanMessage) {
-            await sock.sendMessage(jid, { text: cleanMessage });
-            didReply = true;
+        if (state === "AWAITING_SALE_PICK") {
+            const buf = getTempBufferForJid(jid);
+            const idx = parseQty(text) - 1;
+            if (!buf?.candidates || Number.isNaN(idx) || idx < 0 || idx >= buf.candidates.length) {
+                await sock.sendMessage(jid, { text: "Respondé con el número de la lista (ej: 1)." });
+                return;
+            }
+            const product = buf.candidates[idx];
+            setTempBufferForJid(jid, { product });
+            await sock.sendMessage(jid, { text: `Seleccionaste *${product.nombre}*.\n¿Cuántas unidades se vendieron?` });
+            setStateForJid(jid, "AWAITING_SALE_QTY");
+            return;
         }
 
-        // Si la IA no buscó, no vendió y no escribió nada útil, evitamos el silencio o el "No encontré" fuera de lugar.
-        if (!didReply) {
-            await sock.sendMessage(jid, { text: "No te entendí bien. Decime el nombre de un producto, o escribí *menu* para ver las opciones." });
+        if (state === "AWAITING_SALE_QTY") {
+            const buf = getTempBufferForJid(jid);
+            const qty = parseQty(text);
+            if (!buf?.product || Number.isNaN(qty) || qty <= 0) {
+                await sock.sendMessage(jid, { text: "Decime un número válido de unidades (ej: 2)." });
+                return;
+            }
+            const product = buf.product;
+            const stock = Number(product.stock) || 0;
+            if (qty > stock) {
+                await sock.sendMessage(jid, { text: `Solo hay ${stock} de ${product.nombre}. Decime una cantidad menor o igual.` });
+                return;
+            }
+            const total = (Number(product.precio) || 0) * qty;
+            setTempBufferForJid(jid, { item: product.nombre, qty });
+            await sock.sendMessage(jid, { text: `¿Confirmar venta de *${qty}x ${product.nombre}* a ${formatCOP(product.precio)} c/u = *${formatCOP(total)}*?\n\nRespondé *Si* o *No*.` });
+            setStateForJid(jid, "CONFIRMING_SALE");
+            return;
         }
 
-        appendTurn(jid, text, cleanMessage || "Procesado.");
+        if (state === "CONFIRMING_SALE") {
+            if (lower === "si" || lower === "sí" || lower === "confirmar" || text === "1") {
+                const pending = getTempBufferForJid(jid);
+                if (pending?.item) {
+                    await sock.sendPresenceUpdate("composing", jid);
+                    const res = await recordSale(pending.item, pending.qty);
+                    await sock.sendMessage(jid, { text: res.success ? `✅ ${res.message || "Venta registrada."}` : `❌ ${res.error || "No pude registrar la venta."}` });
+                }
+                clearTempBufferForJid(jid);
+                setStateForJid(jid, "IDLE");
+                await sock.sendMessage(jid, { text: "Escribí *menu* para otra operación." });
+            } else if (lower === "no" || text === "2") {
+                clearTempBufferForJid(jid);
+                setStateForJid(jid, "IDLE");
+                await sock.sendMessage(jid, { text: "Venta cancelada. Escribí *menu* para otra operación." });
+            } else {
+                await sock.sendMessage(jid, { text: "Respondé *Si* para confirmar o *No* para cancelar." });
+            }
+            return;
+        }
+
+        // ---------- OPCIÓN 2: INGRESAR INVENTARIO (flujo guiado) ----------
+        if (state === "AWAITING_ADD_NAME") {
+            setTempBufferForJid(jid, { name: text });
+            await sock.sendMessage(jid, { text: `Producto: *${text}*.\n¿Cuántas unidades vas a ingresar?` });
+            setStateForJid(jid, "AWAITING_ADD_QTY");
+            return;
+        }
+
+        if (state === "AWAITING_ADD_QTY") {
+            const buf = getTempBufferForJid(jid);
+            const qty = parseQty(text);
+            if (!buf?.name || Number.isNaN(qty) || qty <= 0) {
+                await sock.sendMessage(jid, { text: "Decime un número válido de unidades (ej: 5)." });
+                return;
+            }
+            setTempBufferForJid(jid, { name: buf.name, qty });
+            await sock.sendMessage(jid, { text: "¿Cuál es el *costo* por unidad? (ej: 25000)" });
+            setStateForJid(jid, "AWAITING_ADD_COST");
+            return;
+        }
+
+        if (state === "AWAITING_ADD_COST") {
+            const buf = getTempBufferForJid(jid);
+            const cost = parseMoney(text);
+            if (!buf?.name || Number.isNaN(cost) || cost <= 0) {
+                await sock.sendMessage(jid, { text: "Decime un costo válido (ej: 25000)." });
+                return;
+            }
+            await sock.sendPresenceUpdate("composing", jid);
+            const res = await addStock(buf.name, buf.qty, cost);
+            await sock.sendMessage(jid, { text: res.success ? `✅ ${res.message || "Inventario actualizado."} (${buf.qty}x ${buf.name}, costo ${formatCOP(cost)})` : `❌ ${res.error || "No pude ingresar el inventario."}` });
+            clearTempBufferForJid(jid);
+            setStateForJid(jid, "IDLE");
+            await sock.sendMessage(jid, { text: "Escribí *menu* para otra operación." });
+            return;
+        }
+
+        // ---------- IDLE / charla libre (la IA NO ejecuta acciones) ----------
+        const saludos = ["hola", "buenas", "buenos dias", "buenos días", "buen dia", "buen día", "buenas tardes", "buenas noches", "hey", "ola", "alo", "aló"];
+        if (saludos.some((g) => lower === g || lower.startsWith(g + " "))) {
+            await sock.sendMessage(jid, { text: "¡Hola! Soy el asistente de Indias Motos. 🏍️\nEscribí *menu* para ver las opciones." });
+            return;
+        }
+
+        await sock.sendPresenceUpdate("composing", jid);
+        const history = getHistoryForJid(jid);
+        const aiResponse = await getChatCompletion(text, msg.pushName || "Cliente", history);
+        const reply = aiResponse.replace(/\[.*?\]/g, "").trim() || "Escribí *menu* para ver las opciones.";
+        await sock.sendMessage(jid, { text: reply });
+        appendTurn(jid, text, reply);
         await sock.sendPresenceUpdate("paused", jid);
 
     } catch (err) {
