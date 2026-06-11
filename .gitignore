@@ -3,3 +3,6 @@ node_modules/
 
 # Sesión local de WhatsApp (Baileys)
 auth_info_baileys/
+
+# Tooling local (gentle-ai / SDD)
+.atl/

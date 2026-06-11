@@ -1,18 +1,36 @@
 # Render.com — Web Service (Node)
-# Plan gratuito: el servicio se duerme tras ~15 min sin tráfico HTTP; un bot WhatsApp 24/7
-# necesita plan de pago (Always on) o un host tipo VPS. Ver comentarios en src/server.js
+# Plan gratuito: el servicio se duerme tras ~15 min sin tráfico HTTP. La sesión de WhatsApp
+# vive en Postgres (DATABASE_URL), así que al despertar reconecta sin re-escanear el QR.
+# Para un bot WhatsApp 24/7 real se necesita plan de pago (Always on) o un VPS.
+# Las variables con `sync: false` se configuran como secretos en el dashboard de Render.
 services:
   - type: web
     name: n8n-whatsapp-baileys
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: "20.18.0"
-      # Opcional: sesión en disco persistente (añade Disk en el dashboard y usa la ruta de montaje)
-      # - key: BAILEYS_AUTH_DIR
-      #   value: /data/baileys-auth
+      - key: NODE_ENV
+        value: production
+      # Postgres (Neon, Supabase o Render Postgres) — persiste la sesión de WhatsApp
+      - key: DATABASE_URL
+        sync: false
+      # API de IA (Groq)
+      - key: GROQ_API_KEY
+        sync: false
+      # URL del Apps Script de Google Sheets
+      - key: SHEETS_API_URL
+        sync: false
+      # Contraseña para acceder a /qr y /reset (Basic Auth)
+      - key: ADMIN_TOKEN
+        sync: false
+      # Identidad del negocio
+      - key: BOT_COMPANY
+        value: "Indias Motos"
+      - key: BOT_SALES_REP
+        value: "Asistente"

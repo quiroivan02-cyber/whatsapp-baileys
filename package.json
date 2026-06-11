@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-bot-inmobiliaria",
+  "name": "whatsapp-bot-indias-motos",
   "version": "1.0.0",
-  "description": "Bot de WhatsApp para Inmobiliaria Prime con IA",
+  "description": "Bot de WhatsApp para Indias Motos (inventario y ventas) con IA",
   "main": "src/server.js",
   "type": "module",
   "scripts": {
