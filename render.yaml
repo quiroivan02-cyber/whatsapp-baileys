@@ -5,7 +5,7 @@
 # Las variables con `sync: false` se configuran como secretos en el dashboard de Render.
 services:
   - type: web
-    name: n8n-whatsapp-baileys
+    name: whatsapp-inventory-bot
     runtime: node
     plan: free
     region: oregon

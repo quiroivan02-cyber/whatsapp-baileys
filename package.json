@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-bot-indias-motos",
+  "name": "whatsapp-inventory-bot",
   "version": "1.0.0",
-  "description": "Bot de WhatsApp para Indias Motos (inventario y ventas) con IA",
+  "description": "Bot de WhatsApp con IA para gestión de inventario y ventas vía Google Sheets",
   "main": "src/server.js",
   "type": "module",
   "scripts": {
@@ -13,9 +13,11 @@
     "bot",
     "baileys",
     "groq",
-    "ai"
+    "ai",
+    "inventory",
+    "google-sheets"
   ],
-  "author": "Tu Nombre",
+  "author": "quiroivan02",
   "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
